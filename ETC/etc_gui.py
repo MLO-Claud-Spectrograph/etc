@@ -1,10 +1,33 @@
 from __future__ import annotations
 
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from matplotlib import pyplot as plt
+import matplotlib as mpl
+# Pick the first available preferred style (fallback to default)
+for _style in ("seaborn-whitegrid", "seaborn", "ggplot", "classic", "default"):
+    if _style in plt.style.available:
+        plt.style.use(_style)
+        break
+else:
+    plt.style.use("default")
+
+mpl.rcParams.update({
+    "font.family": "sans-serif",
+    "font.sans-serif": ["DejaVu Sans", "Arial"],
+    "font.size": 11,
+    "axes.titlesize": 14,
+    "axes.labelsize": 12,
+    "legend.frameon": False,
+})
+
+# GUI palette and background
+GUI_BG = "#000020"
+ACCENT_COLORS = ["#08a878"]
+PREFERRED_FONTS = ["Helvetica", "DejaVu Sans", "Liberation Sans", "Arial", "Nimbus Sans", "fixed"]
 
 from etc_core import ETCCalculator, get_default_spectrum_file
 
@@ -13,8 +36,8 @@ class PlaceholderEntry(ttk.Entry):
     def __init__(self, master, placeholder: str, **kwargs):
         super().__init__(master, **kwargs)
         self.placeholder = placeholder
-        self.default_fg = "black"
-        self.placeholder_fg = "gray"
+        self.default_fg = "#000000"
+        self.placeholder_fg = "#ffffff"
         self._show_placeholder()
         self.bind("<FocusIn>", self._clear_placeholder)
         self.bind("<FocusOut>", self._restore_if_empty)
@@ -38,11 +61,63 @@ class PlaceholderEntry(ttk.Entry):
         return "" if val == self.placeholder and self.cget("foreground") == self.placeholder_fg else val
 
 
+class SquareToggle(ttk.Frame):
+    """Square toggle with colored fill when on, white when off and no checkmark."""
+    def __init__(self, master, text, var: tk.BooleanVar, color="#0015ff"):
+        super().__init__(master, style='TFrame')
+        self.var = var
+        self.color = color
+        self._bg = GUI_BG
+        self.canvas = tk.Canvas(self, width=18, height=18, highlightthickness=0, bg=self._bg, bd=0)
+        self.rect = self.canvas.create_rectangle(2, 2, 16, 16, fill=(self.color if self.var.get() else "#ffffff"), outline=self.color)
+        self.canvas.pack(side=tk.LEFT)
+        self.label = ttk.Label(self, text=text)
+        self.label.pack(side=tk.LEFT, padx=(6, 0))
+        # Bind click and disable hover color changes
+        for w in (self.canvas, self.label, self):
+            w.bind("<Button-1>", self._toggle)
+            w.bind("<Enter>", lambda e: "break")
+            w.bind("<Leave>", lambda e: "break")
+        try:
+            self.var.trace_add("write", lambda *a: self._update())
+        except AttributeError:
+            self.var.trace("w", lambda *a: self._update())
+        self._update()
+
+    def _update(self):
+        fill = self.color if self.var.get() else "#ffffff"
+        self.canvas.itemconfig(self.rect, fill=fill)
+
+    def _toggle(self, _event=None):
+        self.var.set(not self.var.get())
+
+
 class ETCGui(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("MLO Spectrograph ETC")
         self.geometry("980x760")
+
+        # Apply ttk styles and fonts
+        style = ttk.Style(self)
+        # pick first available preferred font and apply
+        chosen_font = PREFERRED_FONTS[-1]
+        try:
+            default_font = tkfont.nametofont("TkDefaultFont")
+            for f in PREFERRED_FONTS:
+                default_font.configure(family=f)
+                chosen_font = f
+                break
+        except Exception:
+            pass
+        style.configure('.', font=(chosen_font, 11), foreground='white')
+        style.configure('TFrame', background=GUI_BG)
+        style.configure('TLabel', background=GUI_BG, foreground='white')
+        style.configure('TLabelframe', background=GUI_BG)
+        style.configure('TLabelframe.Label', background=GUI_BG, foreground='white')
+        style.configure('TEntry', fieldbackground='#ffffff', foreground='#000000')
+        style.configure('TCombobox', fieldbackground='#ffffff', foreground='#000000')
+        self.configure(bg=GUI_BG)
 
         self.calc = ETCCalculator()
 
@@ -66,63 +141,81 @@ class ETCGui(tk.Tk):
 
         path_frame = ttk.LabelFrame(root, text="Spectrum file")
         path_frame.pack(fill=tk.X, pady=6)
-        ttk.Entry(path_frame, textvariable=self.spectrum_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6, pady=6)
-        ttk.Button(path_frame, text="Browse", command=self._browse).pack(side=tk.LEFT, padx=6)
+        self.path_entry = tk.Entry(path_frame, textvariable=self.spectrum_path, fg='#808080', bg='#ffffff', insertbackground='#000000', relief='solid', bd=1)
+        self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6, pady=6)
+        self.path_entry.bind("<FocusIn>", self._on_spectrum_focus_in)
+        self.path_entry.bind("<KeyRelease>", self._on_spectrum_key_release)
+        tk.Button(path_frame, text="Browse", command=self._browse, bg=GUI_BG, fg='white', activebackground=GUI_BG, activeforeground='white', bd=0).pack(side=tk.LEFT, padx=6)
 
         mode_frame = ttk.LabelFrame(root, text="Instrument options")
         mode_frame.pack(fill=tk.X, pady=6)
 
-        ttk.Label(mode_frame, text="Grating").grid(row=0, column=0, padx=6, pady=6, sticky=tk.W)
+        ttk.Label(mode_frame, text="Grating:").grid(row=0, column=0, padx=6, pady=6, sticky=tk.W)
         ttk.Combobox(mode_frame, textvariable=self.grating, values=[str(g) for g in self.calc.available_gratings], state="readonly", width=12).grid(row=0, column=1, padx=6, pady=6)
 
-        ttk.Label(mode_frame, text="Airmass model").grid(row=0, column=2, padx=6, pady=6, sticky=tk.W)
+        ttk.Label(mode_frame, text="Airmass model:").grid(row=0, column=2, padx=6, pady=6, sticky=tk.W)
         ttk.Combobox(mode_frame, textvariable=self.airmass, values=self.calc.available_airmass_models, state="readonly", width=18).grid(row=0, column=3, padx=6, pady=6)
 
-        toggles_frame = ttk.LabelFrame(root, text="Throughput components (checkbox = included)")
+        toggles_frame = ttk.LabelFrame(root, text="Included Throughput Factors:")
         toggles_frame.pack(fill=tk.X, pady=6)
         for i, (name, var) in enumerate(self.toggle_vars.items()):
-            ttk.Checkbutton(toggles_frame, text=name.capitalize(), variable=var).grid(row=0, column=i, padx=8, pady=6, sticky=tk.W)
+            toggle = SquareToggle(toggles_frame, name.capitalize(), var, color=ACCENT_COLORS[0])
+            toggle.grid(row=0, column=i, padx=8, pady=6, sticky=tk.W)
 
         fields_frame = ttk.LabelFrame(root, text="SNR inputs")
         fields_frame.pack(fill=tk.X, pady=6)
 
         self.entries = {}
         specs = [
-            ("exp_time", "7200"),
-            ("z", "0.05"),
-            ("wave_centers_nm", "600,700"),
-            ("binsize_nm", "5"),
-            ("dispersion_nm_per_pix", "0.14"),
-            ("spacial_aperture_pix", "13"),
-            ("sky_brightness", "21.6"),
-            ("read_noise_e", "2.3"),
-            ("pix_scale", "0.8"),
-            ("lens", "0.99"),
-            ("t_diam_mm", "1250"),
-            ("temp_c", "-10"),
+            ("exp_time", "", "s", "Exposure Time:"),
+            ("z", "", "", "Redshift:"),
+            ("wave_centers_nm", "", "nm", "Wave Centers (comma-separated):"),
+            ("binsize_nm", "", "nm", "Bin Size:"),
+            ("dispersion_nm_per_pix", "0.14", "nm/pix", "Dispersion:"),
+            ("spacial_aperture_pix", "13", "pix", "Spacial Aperture:"),
+            ("sky_brightness", "21.6", "mag/arcsec^2", "Sky Brightness:"),
+            ("read_noise_e", "2.3", "e-", "Read Noise:"),
+            ("pix_scale", "0.8", "arcsec/pix", "Pix Scale:"),
+            ("lens", "0.99", "", "Lens Throughput:"),
+            ("t_diam_mm", "1250", "mm", "Telescope Diameter:"),
+            ("temp_c", "-10", "C", "Temperature:"),
         ]
 
-        for i, (key, default) in enumerate(specs):
+        for i, (key, placeholder, unit, display) in enumerate(specs):
             r, c = divmod(i, 4)
-            ttk.Label(fields_frame, text=key).grid(row=r * 2, column=c, padx=6, pady=(6, 0), sticky=tk.W)
-            entry = PlaceholderEntry(fields_frame, default, width=22)
-            entry.grid(row=r * 2 + 1, column=c, padx=6, pady=(0, 6), sticky=tk.W)
+            ttk.Label(fields_frame, text=display).grid(row=r * 2, column=c, padx=6, pady=(6, 0), sticky=tk.W)
+            holder = ttk.Frame(fields_frame)
+            holder.grid(row=r * 2 + 1, column=c, padx=6, pady=(0, 6), sticky=tk.W)
+            entry = PlaceholderEntry(holder, placeholder, width=18, foreground='black')
+            entry.pack(side=tk.LEFT)
+            if unit:
+                ttk.Label(holder, text=unit).pack(side=tk.LEFT, padx=(6, 0))
             self.entries[key] = entry
 
         btn_frame = ttk.Frame(root)
         btn_frame.pack(fill=tk.X, pady=10)
-        ttk.Button(btn_frame, text="Compute SNR", command=self._compute).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btn_frame, text="Plot throughput", command=self._plot_throughput).pack(side=tk.LEFT, padx=6)
+        tk.Button(btn_frame, text="Compute SNR", command=self._compute, bg=GUI_BG, fg='white', activebackground=GUI_BG, activeforeground='white', bd=0).pack(side=tk.LEFT, padx=6)
+        tk.Button(btn_frame, text="Plot throughput", command=self._plot_throughput, bg=GUI_BG, fg='white', activebackground=GUI_BG, activeforeground='white', bd=0).pack(side=tk.LEFT, padx=6)
 
         out_frame = ttk.LabelFrame(root, text="Results")
         out_frame.pack(fill=tk.BOTH, expand=True)
-        self.output = tk.Text(out_frame, wrap=tk.WORD, height=16)
+        self.output = tk.Text(out_frame, wrap=tk.WORD, height=16, bg=GUI_BG, fg='white', insertbackground='white')
         self.output.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
     def _browse(self):
         path = filedialog.askopenfilename(initialdir=str(Path(self.spectrum_path.get()).parent))
         if path:
             self.spectrum_path.set(path)
+            self.path_entry.config(fg='#000000')
+
+    def _on_spectrum_focus_in(self, _event=None):
+        if self.path_entry.cget('fg') == '#ffffff':
+            self.path_entry.delete(0, tk.END)
+            self.path_entry.config(fg='#000000')
+
+    def _on_spectrum_key_release(self, _event=None):
+        if self.path_entry.get() and self.path_entry.cget('fg') == '#ffffff':
+            self.path_entry.config(fg='#000000')
 
     def _read_inputs(self):
         try:
@@ -190,15 +283,29 @@ class ETCGui(tk.Tk):
             messagebox.showerror("Plot error", str(exc))
             return
 
-        plt.figure(figsize=(10, 6))
-        for name in ["detector", "grating", "fiber", "airmass", "lens"]:
-            plt.plot(wave, components[name], label=name.capitalize(), alpha=0.8)
-        plt.plot(wave, components["total"], label="Total", linewidth=2.8, color="black")
-        plt.xlabel("Wavelength (nm)")
-        plt.ylabel("Throughput")
-        plt.title("Throughput Components and Total")
-        plt.legend()
-        plt.tight_layout()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        cmap = plt.get_cmap("tab10")
+        comp_names = ["detector", "grating", "fiber", "airmass", "lens"]
+        for i, name in enumerate(comp_names):
+            ax.plot(wave, components[name], label=name.capitalize(), color=cmap(i % 10), alpha=0.9, linewidth=1.8)
+        ax.plot(wave, components["total"], label="Total", linewidth=3.0, color="black")
+
+        binsize = params.get("binsize", None)
+        centers = params.get("wave_centers", [])
+        for center in centers:
+            ax.axvline(center, color="#000000", linestyle="-", linewidth=1.2, alpha=0.9)
+            if binsize is not None:
+                left = center - binsize / 2.0
+                right = center + binsize / 2.0
+                ax.axvline(left, color="#7f7f7f", linestyle="--", linewidth=0.9, alpha=0.7)
+                ax.axvline(right, color="#7f7f7f", linestyle="--", linewidth=0.9, alpha=0.7)
+
+        ax.set_xlabel("Wavelength (nm)")
+        ax.set_ylabel("Throughput")
+        ax.set_title("Throughput Components and Total")
+        ax.set_xlim(400, 900)
+        ax.legend()
+        fig.tight_layout()
         plt.show()
 
 
