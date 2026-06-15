@@ -6,6 +6,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from matplotlib import pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 import matplotlib as mpl
 # Pick the first available preferred style (fallback to default)
 for _style in ("seaborn-whitegrid", "seaborn", "ggplot", "classic", "default"):
@@ -26,7 +28,7 @@ mpl.rcParams.update({
 
 # GUI palette and background
 GUI_BG = "#000020"
-ACCENT_COLORS = ["#08a878"]
+ACCENT_COLORS = ["#f7f702"]
 PREFERRED_FONTS = ["Helvetica", "DejaVu Sans", "Liberation Sans", "Arial", "Nimbus Sans", "fixed"]
 
 from etc_core import ETCCalculator, get_default_spectrum_file
@@ -37,7 +39,7 @@ class PlaceholderEntry(ttk.Entry):
         super().__init__(master, **kwargs)
         self.placeholder = placeholder
         self.default_fg = "#000000"
-        self.placeholder_fg = "#ffffff"
+        self.placeholder_fg = "#808080"
         self._show_placeholder()
         self.bind("<FocusIn>", self._clear_placeholder)
         self.bind("<FocusOut>", self._restore_if_empty)
@@ -62,14 +64,18 @@ class PlaceholderEntry(ttk.Entry):
 
 
 class SquareToggle(ttk.Frame):
-    """Square toggle with colored fill when on, white when off and no checkmark."""
-    def __init__(self, master, text, var: tk.BooleanVar, color="#0015ff"):
+    """Square toggle with colored fill when on, white when off and a black checkmark when on."""
+    def __init__(self, master, text, var: tk.BooleanVar, color="#f7f702"):
         super().__init__(master, style='TFrame')
         self.var = var
         self.color = color
         self._bg = GUI_BG
         self.canvas = tk.Canvas(self, width=18, height=18, highlightthickness=0, bg=self._bg, bd=0)
         self.rect = self.canvas.create_rectangle(2, 2, 16, 16, fill=(self.color if self.var.get() else "#ffffff"), outline=self.color)
+        # create a checkmark (hidden when off)
+        self.check = self.canvas.create_line(5, 10, 8, 13, 14, 5, width=2, fill='black', capstyle=tk.ROUND, joinstyle=tk.ROUND)
+        if not self.var.get():
+            self.canvas.itemconfig(self.check, state='hidden')
         self.canvas.pack(side=tk.LEFT)
         self.label = ttk.Label(self, text=text)
         self.label.pack(side=tk.LEFT, padx=(6, 0))
@@ -87,6 +93,7 @@ class SquareToggle(ttk.Frame):
     def _update(self):
         fill = self.color if self.var.get() else "#ffffff"
         self.canvas.itemconfig(self.rect, fill=fill)
+        self.canvas.itemconfig(self.check, state='normal' if self.var.get() else 'hidden')
 
     def _toggle(self, _event=None):
         self.var.set(not self.var.get())
@@ -117,11 +124,12 @@ class ETCGui(tk.Tk):
         style.configure('TLabelframe.Label', background=GUI_BG, foreground='white')
         style.configure('TEntry', fieldbackground='#ffffff', foreground='#000000')
         style.configure('TCombobox', fieldbackground='#ffffff', foreground='#000000')
+        style.configure('NoOutline.TCombobox', fieldbackground=GUI_BG, foreground='white', relief='flat', borderwidth=0)
         self.configure(bg=GUI_BG)
 
         self.calc = ETCCalculator()
 
-        self.spectrum_path = tk.StringVar(value=str(get_default_spectrum_file()))
+        self.spectrum_path = tk.StringVar(value="")
         self.grating = tk.StringVar(value="1229")
         self.airmass = tk.StringVar(value=self.calc.available_airmass_models[0])
 
@@ -134,18 +142,28 @@ class ETCGui(tk.Tk):
         }
 
         self._build_ui()
+        # Prompt user to choose reference spectrum on startup (starts in 'data' dir)
+        self.after(100, self._prompt_for_spectrum)
 
     def _build_ui(self):
         root = ttk.Frame(self, padding=12)
         root.pack(fill=tk.BOTH, expand=True)
 
-        path_frame = ttk.LabelFrame(root, text="Spectrum file")
+        path_frame = ttk.LabelFrame(root, text="Spectrum:")
         path_frame.pack(fill=tk.X, pady=6)
-        self.path_entry = tk.Entry(path_frame, textvariable=self.spectrum_path, fg='#808080', bg='#ffffff', insertbackground='#000000', relief='solid', bd=1)
-        self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6, pady=6)
+        # picker centered at top
+        picker_frame = ttk.Frame(path_frame)
+        picker_frame.pack(fill=tk.X, pady=(6, 0))
+        self.path_entry = tk.Entry(picker_frame, textvariable=self.spectrum_path, fg='#000000', bg='#ffffff', insertbackground='#000000', relief='solid', bd=1, width=60)
+        self.path_entry.pack(side=tk.LEFT, padx=6, pady=6)
         self.path_entry.bind("<FocusIn>", self._on_spectrum_focus_in)
         self.path_entry.bind("<KeyRelease>", self._on_spectrum_key_release)
-        tk.Button(path_frame, text="Browse", command=self._browse, bg=GUI_BG, fg='white', activebackground=GUI_BG, activeforeground='white', bd=0).pack(side=tk.LEFT, padx=6)
+        tk.Button(picker_frame, text="Browse", command=lambda: self._browse(initial_dir=None), bg=GUI_BG, fg='white', activebackground=GUI_BG, activeforeground='white', bd=0).pack(side=tk.LEFT, padx=6)
+
+        # Spectrum preview removed per user request
+        self._small_fig = None
+        self._small_ax = None
+        self._small_canvas = None
 
         mode_frame = ttk.LabelFrame(root, text="Instrument options")
         mode_frame.pack(fill=tk.X, pady=6)
@@ -202,11 +220,145 @@ class ETCGui(tk.Tk):
         self.output = tk.Text(out_frame, wrap=tk.WORD, height=16, bg=GUI_BG, fg='white', insertbackground='white')
         self.output.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
-    def _browse(self):
-        path = filedialog.askopenfilename(initialdir=str(Path(self.spectrum_path.get()).parent))
-        if path:
+    def _browse(self, initial_dir: str | None = None):
+        # Custom file browser so dialog widget colors can be controlled
+        d = tk.Toplevel(self)
+        d.title("Select spectrum file")
+        d.configure(bg=GUI_BG)
+        d.transient(self)
+        d.grab_set()
+
+        cur_dir = Path(initial_dir) if initial_dir else (Path(self.spectrum_path.get()) if self.spectrum_path.get() else Path.cwd())
+        dir_frame = ttk.Frame(d)
+        dir_frame.pack(fill=tk.X, padx=8, pady=8)
+        tk.Label(dir_frame, text="Directory:", fg='#000000', bg=GUI_BG).pack(side=tk.LEFT)
+        dir_var = tk.StringVar(value=str(cur_dir))
+        dir_entry = tk.Entry(dir_frame, textvariable=dir_var, fg='#000000', bg='#ffffff')
+        dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+
+        type_frame = ttk.Frame(d)
+        type_frame.pack(fill=tk.X, padx=8)
+        tk.Label(type_frame, text="Files of type:", fg='white', bg=GUI_BG, relief='flat').pack(side=tk.LEFT)
+        filetypes = ["All files (*.*)", "FITS (*.fits)", "Text (*.txt)"]
+        type_var = tk.StringVar(value=filetypes[0])
+        type_combo = ttk.Combobox(type_frame, textvariable=type_var, values=filetypes, state='readonly', width=20, style='NoOutline.TCombobox')
+        type_combo.pack(side=tk.LEFT, padx=6)
+
+        list_frame = ttk.Frame(d)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, selectmode=tk.SINGLE, bg='white', fg='black', highlightthickness=0)
+        listbox.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        def update_file_list(_=None):
+            listbox.delete(0, tk.END)
+            p = Path(dir_var.get())
+            if not p.exists():
+                return
+            pattern = '*'
+            sel = type_var.get()
+            if 'FITS' in sel:
+                pattern = '*.fits'
+            elif 'Text' in sel:
+                pattern = '*.txt'
+            for f in sorted(p.glob(pattern)):
+                if f.is_file():
+                    listbox.insert(tk.END, str(f.name))
+
+        def change_dir(_=None):
+            update_file_list()
+
+        dir_entry.bind("<Return>", lambda e: change_dir())
+        type_combo.bind("<<ComboboxSelected>>", update_file_list)
+
+        update_file_list()
+
+        btn_frame = ttk.Frame(d)
+        btn_frame.pack(fill=tk.X, padx=8, pady=8)
+        def do_open():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            name = listbox.get(sel[0])
+            path = str(Path(dir_var.get()) / name)
             self.spectrum_path.set(path)
             self.path_entry.config(fg='#000000')
+            try:
+                self._update_small_spectrum_plot()
+            except Exception:
+                pass
+            d.destroy()
+
+        def do_cancel():
+            d.destroy()
+
+        tk.Button(btn_frame, text="Open", command=do_open, bg=GUI_BG, fg='white', bd=0, activebackground=GUI_BG, activeforeground='white').pack(side=tk.RIGHT, padx=6)
+        tk.Button(btn_frame, text="Cancel", command=do_cancel, bg=GUI_BG, fg='white', bd=0, activebackground=GUI_BG, activeforeground='white').pack(side=tk.RIGHT)
+
+        d.wait_window()
+
+    def _prompt_for_spectrum(self):
+        # Force user to choose a reference spectrum at startup. Start in repo 'data' directory.
+        data_dir = Path(__file__).resolve().parents[1] / "data" / "SN_ref_spectra"
+        while not self.spectrum_path.get():
+            self._browse(initial_dir=str(data_dir) if data_dir.exists() else None)
+            if not self.spectrum_path.get():
+                messagebox.showwarning("Reference spectrum required", "Please select a reference spectrum file to continue.")
+
+    def _update_small_spectrum_plot(self):
+        if not getattr(self, '_small_ax', None) or not self.spectrum_path.get():
+            return
+        try:
+            z_val = 0.0
+            try:
+                z_val = float(self.entries.get('z').value()) if 'z' in self.entries else 0.0
+            except Exception:
+                z_val = 0.0
+            spec = self.calc.load_spectrum(self.spectrum_path.get(), z_val)
+            wave = spec.get('wave')
+            # detect flux-like key
+            flux = None
+            for key in ('flux', 'spec', 'y', 'flux_density'):
+                if key in spec:
+                    flux = spec[key]
+                    break
+            if wave is None or flux is None:
+                # clear plot
+                self._small_ax.clear()
+                self._small_canvas.draw()
+                return
+            # convert nm to Angstroms and normalize flux to 0..1
+            try:
+                import numpy as _np
+                wave_arr = _np.asarray(wave) * 10.0
+                flux_arr = _np.asarray(flux)
+                # shift and scale to 0-1
+                flux_arr = flux_arr - flux_arr.min()
+                maxv = flux_arr.max() if flux_arr.size else 0.0
+                if maxv > 0:
+                    flux_arr = flux_arr / maxv
+                else:
+                    flux_arr = flux_arr
+            except Exception:
+                wave_arr = [w * 10.0 for w in wave]
+                flux_arr = flux
+            self._small_ax.clear()
+            self._small_ax.plot(wave_arr, flux_arr, color='#1f77b4', linewidth=0.8)
+            self._small_ax.set_xlabel('Angstrom')
+            self._small_ax.set_ylabel('Flux')
+            self._small_ax.set_xlim(2000, 10000)
+            self._small_ax.set_ylim(0, 1)
+            self._small_ax.tick_params(axis='both', which='major', labelsize=8)
+            self._small_fig.tight_layout()
+            self._small_canvas.draw()
+        except Exception:
+            try:
+                self._small_ax.clear()
+                self._small_canvas.draw()
+            except Exception:
+                pass
 
     def _on_spectrum_focus_in(self, _event=None):
         if self.path_entry.cget('fg') == '#ffffff':
@@ -287,8 +439,8 @@ class ETCGui(tk.Tk):
         cmap = plt.get_cmap("tab10")
         comp_names = ["detector", "grating", "fiber", "airmass", "lens"]
         for i, name in enumerate(comp_names):
-            ax.plot(wave, components[name], label=name.capitalize(), color=cmap(i % 10), alpha=0.9, linewidth=1.8)
-        ax.plot(wave, components["total"], label="Total", linewidth=3.0, color="black")
+            ax.plot(wave, components[name], label=name.capitalize(), color=cmap(i % 10), ls='--', alpha=0.9, linewidth=1.8)
+        ax.plot(wave, components["total"], label="Total", linewidth=3.0, color="#0abd78")
 
         binsize = params.get("binsize", None)
         centers = params.get("wave_centers", [])
@@ -299,10 +451,15 @@ class ETCGui(tk.Tk):
                 right = center + binsize / 2.0
                 ax.axvline(left, color="#7f7f7f", linestyle="--", linewidth=0.9, alpha=0.7)
                 ax.axvline(right, color="#7f7f7f", linestyle="--", linewidth=0.9, alpha=0.7)
+        try:
+            ytop = ax.get_ylim()[1]
+            for center in centers:
+                ax.text(center-5, ytop * 0.95, 'Wave Bin Center', rotation=90, va='top', ha='right', color='gray', fontsize=8)
+        except Exception:
+            pass
 
         ax.set_xlabel("Wavelength (nm)")
         ax.set_ylabel("Throughput")
-        ax.set_title("Throughput Components and Total")
         ax.set_xlim(400, 900)
         ax.legend()
         fig.tight_layout()
