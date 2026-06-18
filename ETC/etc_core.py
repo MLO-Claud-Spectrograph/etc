@@ -31,6 +31,24 @@ class ETCCalculator:
         self.csv_root = self.data_root / "csv files"
         self._load_curves()
 
+    @staticmethod
+    def _interp_with_linear_extrapolation(x: np.ndarray, xp: np.ndarray, fp: np.ndarray) -> np.ndarray:
+        values = np.interp(x, xp, fp)
+        if xp.size < 2:
+            return values
+
+        fit_points = min(5, xp.size)
+        left_slope, left_intercept = np.polyfit(xp[:fit_points], fp[:fit_points], 1)
+        right_slope, right_intercept = np.polyfit(xp[-fit_points:], fp[-fit_points:], 1)
+
+        left_mask = x < xp[0]
+        right_mask = x > xp[-1]
+        if np.any(left_mask):
+            values[left_mask] = left_slope * x[left_mask] + left_intercept
+        if np.any(right_mask):
+            values[right_mask] = right_slope * x[right_mask] + right_intercept
+        return values
+
     def _load_curves(self) -> None:
         dtype = [("wave", float), ("tp", float)]
 
@@ -43,8 +61,8 @@ class ETCCalculator:
         self.fiber_att["tp"] = 10 ** (-(self.fiber_att["tp"] * 0.01) / 10)
 
         self.std_wave_grid = np.arange(314.0, 901.0)
-        p_interp = np.interp(self.std_wave_grid, self.grat_1229_p["wave"], self.grat_1229_p["tp"])
-        s_interp = np.interp(self.std_wave_grid, self.grat_1229_s["wave"], self.grat_1229_s["tp"])
+        p_interp = self._interp_with_linear_extrapolation(self.std_wave_grid, self.grat_1229_p["wave"], self.grat_1229_p["tp"])
+        s_interp = self._interp_with_linear_extrapolation(self.std_wave_grid, self.grat_1229_s["wave"], self.grat_1229_s["tp"])
         self.mean_1229 = np.nanmean([p_interp, s_interp], axis=0)
 
         self.airmass_models: Dict[str, np.ndarray] = {}
@@ -77,9 +95,9 @@ class ETCCalculator:
 
     def get_gr(self, wave_nm: float, grat_master_num: int) -> float:
         if grat_master_num == 1229:
-            return self._interp_scalar(wave_nm, self.std_wave_grid, self.mean_1229)
+            return float(self._interp_with_linear_extrapolation(np.asarray([wave_nm], dtype=float), self.std_wave_grid, self.mean_1229)[0])
         if grat_master_num == 1294:
-            return self._interp_scalar(wave_nm, self.grat_1294["wave"], self.grat_1294["tp"])
+            return float(self._interp_with_linear_extrapolation(np.asarray([wave_nm], dtype=float), self.grat_1294["wave"], self.grat_1294["tp"])[0])
         raise ValueError(f"Unsupported grating '{grat_master_num}'. Supported: 1229, 1294")
 
     def get_fib_att(self, wave_nm: float) -> float:
@@ -175,7 +193,7 @@ class ETCCalculator:
 
         if np.any((wave_centers - binsize / 2) < 400) or np.any((wave_centers + binsize / 2) > 900):
             raise ValueError(
-                f"One or more bin centers ({wave_centers}) are outside instrument range (400-900 nm) for binsize={binsize}."
+                f"One or more bin centers ({wave_centers}) are outside instrument range ({400+binsize}-{900-binsize} nm) for binsize={binsize}."
             )
         if not binsize > 0:
             raise ValueError("Bin size must be positive.")

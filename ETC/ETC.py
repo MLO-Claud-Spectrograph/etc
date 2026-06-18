@@ -30,6 +30,17 @@ mpl.rcParams.update({
 GUI_BG = "#000020"
 ACCENT_COLORS = ["#f7f702"]
 PREFERRED_FONTS = ["Helvetica", "DejaVu Sans", "Liberation Sans", "Arial", "Nimbus Sans", "fixed"]
+AIRMass_MODEL_LABELS = {
+    "average": "Average",
+    "ctio": "Cerro Tololo",
+    "kpno": "Kitt Peak",
+    "lapalma": "Roque de Los Muchachos",
+    "mko": "Mauna Kea",
+    "mtham": "Lick",
+    "paranal": "ESO (Paranal)",
+    "apo": "Apache Point",
+}
+AIRMass_DISPLAY_TO_KEY = {label: key for key, label in AIRMass_MODEL_LABELS.items()}
 
 from etc_core import ETCCalculator, get_default_spectrum_file
 
@@ -131,7 +142,8 @@ class ETCGui(tk.Tk):
 
         self.spectrum_path = tk.StringVar(value="")
         self.grating = tk.StringVar(value="1229")
-        self.airmass = tk.StringVar(value=self.calc.available_airmass_models[0])
+        default_airmass_key = self.calc.available_airmass_models[0]
+        self.airmass = tk.StringVar(value=self._airmass_display_label(default_airmass_key))
 
         self.toggle_vars = {
             "detector": tk.BooleanVar(value=True),
@@ -172,7 +184,7 @@ class ETCGui(tk.Tk):
         ttk.Combobox(mode_frame, textvariable=self.grating, values=[str(g) for g in self.calc.available_gratings], state="readonly", width=12).grid(row=0, column=1, padx=6, pady=6)
 
         ttk.Label(mode_frame, text="Airmass model:").grid(row=0, column=2, padx=6, pady=6, sticky=tk.W)
-        ttk.Combobox(mode_frame, textvariable=self.airmass, values=self.calc.available_airmass_models, state="readonly", width=18).grid(row=0, column=3, padx=6, pady=6)
+        ttk.Combobox(mode_frame, textvariable=self.airmass, values=[self._airmass_display_label(model) for model in self.calc.available_airmass_models], state="readonly", width=28).grid(row=0, column=3, padx=6, pady=6)
 
         toggles_frame = ttk.LabelFrame(root, text="Included Throughput Factors:")
         toggles_frame.pack(fill=tk.X, pady=6)
@@ -307,59 +319,6 @@ class ETCGui(tk.Tk):
             if not self.spectrum_path.get():
                 messagebox.showwarning("Reference spectrum required", "Please select a reference spectrum file to continue.")
 
-    def _update_small_spectrum_plot(self):
-        if not getattr(self, '_small_ax', None) or not self.spectrum_path.get():
-            return
-        try:
-            z_val = 0.0
-            try:
-                z_val = float(self.entries.get('z').value()) if 'z' in self.entries else 0.0
-            except Exception:
-                z_val = 0.0
-            spec = self.calc.load_spectrum(self.spectrum_path.get(), z_val)
-            wave = spec.get('wave')
-            # detect flux-like key
-            flux = None
-            for key in ('flux', 'spec', 'y', 'flux_density'):
-                if key in spec:
-                    flux = spec[key]
-                    break
-            if wave is None or flux is None:
-                # clear plot
-                self._small_ax.clear()
-                self._small_canvas.draw()
-                return
-            # convert nm to Angstroms and normalize flux to 0..1
-            try:
-                import numpy as _np
-                wave_arr = _np.asarray(wave) * 10.0
-                flux_arr = _np.asarray(flux)
-                # shift and scale to 0-1
-                flux_arr = flux_arr - flux_arr.min()
-                maxv = flux_arr.max() if flux_arr.size else 0.0
-                if maxv > 0:
-                    flux_arr = flux_arr / maxv
-                else:
-                    flux_arr = flux_arr
-            except Exception:
-                wave_arr = [w * 10.0 for w in wave]
-                flux_arr = flux
-            self._small_ax.clear()
-            self._small_ax.plot(wave_arr, flux_arr, color='#1f77b4', linewidth=0.8)
-            self._small_ax.set_xlabel('Angstrom')
-            self._small_ax.set_ylabel('Flux')
-            self._small_ax.set_xlim(2000, 10000)
-            self._small_ax.set_ylim(0, 1)
-            self._small_ax.tick_params(axis='both', which='major', labelsize=8)
-            self._small_fig.tight_layout()
-            self._small_canvas.draw()
-        except Exception:
-            try:
-                self._small_ax.clear()
-                self._small_canvas.draw()
-            except Exception:
-                pass
-
     def _on_spectrum_focus_in(self, _event=None):
         if self.path_entry.cget('fg') == '#ffffff':
             self.path_entry.delete(0, tk.END)
@@ -368,6 +327,12 @@ class ETCGui(tk.Tk):
     def _on_spectrum_key_release(self, _event=None):
         if self.path_entry.get() and self.path_entry.cget('fg') == '#ffffff':
             self.path_entry.config(fg='#000000')
+
+    def _airmass_display_label(self, model_key: str) -> str:
+        return AIRMass_MODEL_LABELS.get(model_key, model_key)
+
+    def _airmass_model_key(self, display_label: str) -> str:
+        return AIRMass_DISPLAY_TO_KEY.get(display_label, display_label)
 
     def _read_inputs(self):
         try:
@@ -384,7 +349,7 @@ class ETCGui(tk.Tk):
                 "read_noise_e": float(self.entries["read_noise_e"].value()),
                 "pix_scale": float(self.entries["pix_scale"].value()),
                 "grat_master_num": int(self.grating.get()),
-                "airmass_model": self.airmass.get(),
+                "airmass_model": self._airmass_model_key(self.airmass.get()),
                 "lens": float(self.entries["lens"].value()),
                 "t_diam": float(self.entries["t_diam_mm"].value()),
                 "temp": float(self.entries["temp_c"].value()),
@@ -402,7 +367,7 @@ class ETCGui(tk.Tk):
 
         self.output.delete("1.0", tk.END)
         self.output.insert(tk.END, f"Grating: {result['meta']['grating']}\n")
-        self.output.insert(tk.END, f"Airmass model: {result['meta']['airmass_model']}\n\n")
+        self.output.insert(tk.END, f"Airmass model: {self._airmass_display_label(result['meta']['airmass_model'])}\n\n")
 
         for row in result["bins"]:
             self.output.insert(
@@ -439,7 +404,8 @@ class ETCGui(tk.Tk):
         cmap = plt.get_cmap("tab10")
         comp_names = ["detector", "grating", "fiber", "airmass", "lens"]
         for i, name in enumerate(comp_names):
-            ax.plot(wave, components[name], label=name.capitalize(), color=cmap(i % 10), ls='--', alpha=0.9, linewidth=1.8)
+            if params["throughput_toggles"].get(name, True):
+                ax.plot(wave, components[name], label=name.capitalize(), color=cmap(i % 10), ls='--', alpha=0.9, linewidth=1.8)
         ax.plot(wave, components["total"], label="Total", linewidth=3.0, color="#0abd78")
 
         binsize = params.get("binsize", None)
@@ -454,7 +420,7 @@ class ETCGui(tk.Tk):
         try:
             ytop = ax.get_ylim()[1]
             for center in centers:
-                ax.text(center-5, ytop * 0.95, 'Wave Bin Center', rotation=90, va='top', ha='right', color='gray', fontsize=8)
+                ax.text(center-3, ytop * 0.2, 'Wave Bin Center', rotation=90, va='top', ha='right', color='#000000', fontsize=8)
         except Exception:
             pass
 
