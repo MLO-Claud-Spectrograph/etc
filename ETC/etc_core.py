@@ -37,9 +37,10 @@ class ETCCalculator:
         "Moravian": 3.9,
     }
 
-    def __init__(self, data_root: Optional[Path] = None):
+    def __init__(self, data_root: Optional[Path] = None, fiber_length_m: Optional[float] = 10.0):
         self.data_root = Path(data_root) if data_root else Path(__file__).resolve().parents[1] / "data"
         self.csv_root = self.data_root / "csv files"
+        self.fiber_length_m = fiber_length_m
         self._load_curves()
 
     @staticmethod
@@ -77,7 +78,7 @@ class ETCCalculator:
         self.grat_1229_s = np.sort(np.genfromtxt(self.csv_root / "master 1229 S plane.csv", dtype=dtype, delimiter=","))
         self.fiber_att = np.sort(np.genfromtxt(self.csv_root / "fiber_attenuation.csv", dtype=dtype, delimiter=","))
 
-        self.fiber_att["tp"] = 10 ** (-(self.fiber_att["tp"] * 0.01) / 10)
+        self.fiber_att["tp"] = 10 ** (-(self.fiber_att["tp"] * (self.fiber_length_m/1000.0)) / 10)
 
         self.std_wave_grid = np.arange(314.0, 901.0)
         p_interp = self._interp_with_linear_extrapolation(self.std_wave_grid, self.grat_1229_p["wave"], self.grat_1229_p["tp"])
