@@ -329,11 +329,6 @@ def get_default_spectrum_file() -> Path:
     return Path(__file__).resolve().parents[1] / "data" / "SN_ref_spectra" / "SNIa_max_z0p05.txt"
 
 
-def get_SNR_from_spectrum(*args, **kwargs):
-    calculator = ETCCalculator()
-    return calculator.get_SNR_from_spectrum(*args, **kwargs)
-
-
 if __name__ == "__main__":
     calc = ETCCalculator()
     result = calc.get_SNR_from_spectrum(
