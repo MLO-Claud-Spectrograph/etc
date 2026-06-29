@@ -26,6 +26,17 @@ class SNRBinResult:
 
 
 class ETCCalculator:
+    CAMERA_QE_FILES: Dict[str, str] = {
+        "QHY268": "qhy268_qe.csv",
+        "Kepler": "Kepler_qe.csv",
+        "Moravian": "Moravian_qe.csv",
+    }
+    CAMERA_READ_NOISE_DEFAULTS: Dict[str, float] = {
+        "QHY268": 2.3,
+        "Kepler": 1.6,
+        "Moravian": 3.9,
+    }
+
     def __init__(self, data_root: Optional[Path] = None):
         self.data_root = Path(data_root) if data_root else Path(__file__).resolve().parents[1] / "data"
         self.csv_root = self.data_root / "csv files"
@@ -52,7 +63,15 @@ class ETCCalculator:
     def _load_curves(self) -> None:
         dtype = [("wave", float), ("tp", float)]
 
-        self.camera_qe = np.sort(np.genfromtxt(self.csv_root / "qhy268_qe.csv", dtype=dtype, delimiter=","))
+        self.camera_qe_curves: Dict[str, np.ndarray] = {}
+        for camera_model, filename in self.CAMERA_QE_FILES.items():
+            curve = np.sort(
+                np.genfromtxt(self.csv_root / filename, dtype=dtype, delimiter=",")
+            )
+            # Some QE files are stored as percentages (0-100) while others are fractions (0-1).
+            if np.nanmax(curve["tp"]) > 1.5:
+                curve["tp"] = curve["tp"] / 100.0
+            self.camera_qe_curves[camera_model] = curve
         self.grat_1294 = np.sort(np.genfromtxt(self.csv_root / "master 1294 unpolarized.csv", dtype=dtype, delimiter=","))
         self.grat_1229_p = np.sort(np.genfromtxt(self.csv_root / "master 1229 P plane.csv", dtype=dtype, delimiter=","))
         self.grat_1229_s = np.sort(np.genfromtxt(self.csv_root / "master 1229 S plane.csv", dtype=dtype, delimiter=","))
@@ -87,11 +106,27 @@ class ETCCalculator:
     def available_airmass_models(self) -> List[str]:
         return sorted(self.airmass_models.keys(), key=lambda m: (m != "average", m))
 
+    @property
+    def available_camera_models(self) -> List[str]:
+        return list(self.CAMERA_QE_FILES.keys())
+
+    def _validate_camera_model(self, camera_model: str) -> None:
+        if camera_model not in self.CAMERA_QE_FILES:
+            raise ValueError(
+                f"Unsupported camera model '{camera_model}'. Supported: {', '.join(self.available_camera_models)}"
+            )
+
+    def default_read_noise_for_camera(self, camera_model: str) -> float:
+        self._validate_camera_model(camera_model)
+        return self.CAMERA_READ_NOISE_DEFAULTS[camera_model]
+
     def _interp_scalar(self, wave_nm: float, wave_grid: np.ndarray, values: np.ndarray) -> float:
         return float(np.interp(wave_nm, wave_grid, values))
 
-    def get_qe(self, wave_nm: float) -> float:
-        return self._interp_scalar(wave_nm, self.camera_qe["wave"], self.camera_qe["tp"])
+    def get_qe(self, wave_nm: float, camera_model: str = "QHY268") -> float:
+        self._validate_camera_model(camera_model)
+        curve = self.camera_qe_curves[camera_model]
+        return self._interp_scalar(wave_nm, curve["wave"], curve["tp"])
 
     def get_gr(self, wave_nm: float, grat_master_num: int) -> float:
         if grat_master_num == 1229:
@@ -124,6 +159,7 @@ class ETCCalculator:
     def get_throughput_components(
         self,
         wave_nm: np.ndarray,
+        camera_model: str,
         grat_master_num: int,
         airmass_model: str,
         lens: float,
@@ -139,7 +175,7 @@ class ETCCalculator:
         if throughput_toggles:
             toggles.update(throughput_toggles)
 
-        detector = np.array([self.get_qe(w) for w in wave_nm])
+        detector = np.array([self.get_qe(w, camera_model=camera_model) for w in wave_nm])
         grating = np.array([max(self.get_gr(w, grat_master_num) - 0.1, 0.0) for w in wave_nm])
         fiber = np.array([self.get_fib_att(w) for w in wave_nm])
         airmass = np.array([self.get_airmass_ext(w, airmass_model) for w in wave_nm])
@@ -180,8 +216,9 @@ class ETCCalculator:
         dispersion: float = 0.14,
         spacial_aperture: float = 13,
         sky_brightness: float = 21.6,
-        read_noise_e: float = 2.3,
+        read_noise_e: Optional[float] = None,
         pix_scale: float = 0.8,
+        camera_model: str = "QHY268",
         grat_master_num: int = 1229,
         airmass_model: str = "average",
         lens: float = 0.99,
@@ -199,11 +236,14 @@ class ETCCalculator:
             raise ValueError("Bin size must be positive.")
         if temp < -20 or temp > 20:
             raise ValueError("Temperature must be between -20 and 20 C.")
+        self._validate_camera_model(camera_model)
 
         spec = self.load_spectrum(spectrum_file, z)
         n_wave = binsize / dispersion
         n_spacial = spacial_aperture
         n_total = n_wave * n_spacial
+        if read_noise_e is None:
+            read_noise_e = self.default_read_noise_for_camera(camera_model)
         read_noise_var = read_noise_e**2 * n_total
         dark_current = self.get_dark_current(temp)
         dark_counts = dark_current * n_total * exp_time
@@ -224,6 +264,7 @@ class ETCCalculator:
 
             components = self.get_throughput_components(
                 wave_bin,
+                camera_model=camera_model,
                 grat_master_num=grat_master_num,
                 airmass_model=airmass_model,
                 lens=lens,
@@ -271,6 +312,8 @@ class ETCCalculator:
                 "read_noise_var": read_noise_var,
                 "dark_counts": dark_counts,
                 "dark_current": dark_current,
+                "camera_model": camera_model,
+                "read_noise_e": read_noise_e,
                 "grating": grat_master_num,
                 "airmass_model": airmass_model,
             },

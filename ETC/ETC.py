@@ -73,6 +73,17 @@ class PlaceholderEntry(ttk.Entry):
         val = self.get().strip()
         return "" if val == self.placeholder and self.cget("foreground") == self.placeholder_fg else val
 
+    def set_placeholder(self, placeholder: str) -> None:
+        showing_placeholder = self.cget("foreground") == self.placeholder_fg and self.get() == self.placeholder
+        self.placeholder = placeholder
+        if showing_placeholder or not self.get().strip():
+            self._show_placeholder()
+
+    def set_value(self, value: str) -> None:
+        self.delete(0, tk.END)
+        self.insert(0, value)
+        self.configure(foreground=self.default_fg)
+
 
 class SquareToggle(ttk.Frame):
     """Square toggle with colored fill when on, white when off and a black checkmark when on."""
@@ -141,9 +152,11 @@ class ETCGui(tk.Tk):
         self.calc = ETCCalculator()
 
         self.spectrum_path = tk.StringVar(value="")
+        self.camera_model = tk.StringVar(value=self.calc.available_camera_models[0])
         self.grating = tk.StringVar(value="1229")
         default_airmass_key = self.calc.available_airmass_models[0]
         self.airmass = tk.StringVar(value=self._airmass_display_label(default_airmass_key))
+        self._read_noise_default_placeholder = f"{self.calc.default_read_noise_for_camera(self.camera_model.get()):.1f}"
 
         self.toggle_vars = {
             "detector": tk.BooleanVar(value=True),
@@ -186,6 +199,17 @@ class ETCGui(tk.Tk):
         ttk.Label(mode_frame, text="Airmass model:").grid(row=0, column=2, padx=6, pady=6, sticky=tk.W)
         ttk.Combobox(mode_frame, textvariable=self.airmass, values=[self._airmass_display_label(model) for model in self.calc.available_airmass_models], state="readonly", width=28).grid(row=0, column=3, padx=6, pady=6)
 
+        ttk.Label(mode_frame, text="Camera model:").grid(row=0, column=4, padx=6, pady=6, sticky=tk.W)
+        camera_combo = ttk.Combobox(
+            mode_frame,
+            textvariable=self.camera_model,
+            values=self.calc.available_camera_models,
+            state="readonly",
+            width=12,
+        )
+        camera_combo.grid(row=0, column=5, padx=6, pady=6)
+        camera_combo.bind("<<ComboboxSelected>>", self._on_camera_model_changed)
+
         toggles_frame = ttk.LabelFrame(root, text="Included Throughput Factors:")
         toggles_frame.pack(fill=tk.X, pady=6)
         for i, (name, var) in enumerate(self.toggle_vars.items()):
@@ -204,7 +228,7 @@ class ETCGui(tk.Tk):
             ("dispersion_nm_per_pix", "0.14", "nm/pix", "Dispersion:"),
             ("spacial_aperture_pix", "13", "pix", "Spacial Aperture:"),
             ("sky_brightness", "21.6", "mag/arcsec^2", "Sky Brightness:"),
-            ("read_noise_e", "2.3", "e-", "Read Noise:"),
+            ("read_noise_e", self._read_noise_default_placeholder, "e-", "Read Noise:"),
             ("pix_scale", "0.8", "arcsec/pix", "Pix Scale:"),
             ("lens", "0.99", "", "Lens Throughput:"),
             ("t_diam_mm", "1250", "mm", "Telescope Diameter:"),
@@ -334,6 +358,11 @@ class ETCGui(tk.Tk):
     def _airmass_model_key(self, display_label: str) -> str:
         return AIRMass_DISPLAY_TO_KEY.get(display_label, display_label)
 
+    def _on_camera_model_changed(self, _event=None):
+        self._read_noise_default_placeholder = f"{self.calc.default_read_noise_for_camera(self.camera_model.get()):.1f}"
+        self.entries["read_noise_e"].set_placeholder(self._read_noise_default_placeholder)
+        self.entries["read_noise_e"].set_value(self._read_noise_default_placeholder)
+
     def _read_inputs(self):
         try:
             wave_centers = [float(x.strip()) for x in self.entries["wave_centers_nm"].value().split(",") if x.strip()]
@@ -348,6 +377,7 @@ class ETCGui(tk.Tk):
                 "sky_brightness": float(self.entries["sky_brightness"].value()),
                 "read_noise_e": float(self.entries["read_noise_e"].value()),
                 "pix_scale": float(self.entries["pix_scale"].value()),
+                "camera_model": self.camera_model.get(),
                 "grat_master_num": int(self.grating.get()),
                 "airmass_model": self._airmass_model_key(self.airmass.get()),
                 "lens": float(self.entries["lens"].value()),
@@ -366,6 +396,8 @@ class ETCGui(tk.Tk):
             return
 
         self.output.delete("1.0", tk.END)
+        self.output.insert(tk.END, f"Camera model: {result['meta']['camera_model']}\n")
+        self.output.insert(tk.END, f"Read noise: {result['meta']['read_noise_e']:.2f} e-\n")
         self.output.insert(tk.END, f"Grating: {result['meta']['grating']}\n")
         self.output.insert(tk.END, f"Airmass model: {self._airmass_display_label(result['meta']['airmass_model'])}\n\n")
 
@@ -391,6 +423,7 @@ class ETCGui(tk.Tk):
             wave = spec["wave"]
             components = self.calc.get_throughput_components(
                 wave,
+                camera_model=params["camera_model"],
                 grat_master_num=params["grat_master_num"],
                 airmass_model=params["airmass_model"],
                 lens=params["lens"],
