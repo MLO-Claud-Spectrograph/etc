@@ -378,7 +378,7 @@ class ETCGui(tk.Tk):
                 "read_noise_e": float(self.entries["read_noise_e"].value()),
                 "pix_scale": float(self.entries["pix_scale"].value()),
                 "camera_model": self.camera_model.get(),
-                "grat_master_num": int(self.grating.get()),
+                "grating_id": int(gr) if (gr := self.grating.get()).isdigit() else gr,
                 "airmass_model": self._airmass_model_key(self.airmass.get()),
                 "lens": float(self.entries["lens"].value()),
                 "t_diam": float(self.entries["t_diam_mm"].value()),
@@ -424,7 +424,7 @@ class ETCGui(tk.Tk):
             components = self.calc.get_throughput_components(
                 wave,
                 camera_model=params["camera_model"],
-                grat_master_num=params["grat_master_num"],
+                grating_id=params["grating_id"],
                 airmass_model=params["airmass_model"],
                 lens=params["lens"],
                 throughput_toggles=params["throughput_toggles"],

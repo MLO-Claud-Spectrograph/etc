@@ -76,6 +76,7 @@ class ETCCalculator:
         self.grat_1294 = np.sort(np.genfromtxt(self.csv_root / "master 1294 unpolarized.csv", dtype=dtype, delimiter=","))
         self.grat_1229_p = np.sort(np.genfromtxt(self.csv_root / "master 1229 P plane.csv", dtype=dtype, delimiter=","))
         self.grat_1229_s = np.sort(np.genfromtxt(self.csv_root / "master 1229 S plane.csv", dtype=dtype, delimiter=","))
+        self.grat_gr50a = np.sort(np.genfromtxt(self.csv_root / "gr50a-0305_efficiency-780.csv", dtype=dtype, delimiter=","))
         self.fiber_att = np.sort(np.genfromtxt(self.csv_root / "fiber_attenuation.csv", dtype=dtype, delimiter=","))
 
         self.fiber_att["tp"] = 10 ** (-(self.fiber_att["tp"] * (self.fiber_length_m/1000.0)) / 10)
@@ -101,7 +102,7 @@ class ETCCalculator:
 
     @property
     def available_gratings(self) -> List[int]:
-        return [1229, 1294]
+        return [1229, 1294, "thorlabs"]
 
     @property
     def available_airmass_models(self) -> List[str]:
@@ -129,12 +130,14 @@ class ETCCalculator:
         curve = self.camera_qe_curves[camera_model]
         return self._interp_scalar(wave_nm, curve["wave"], curve["tp"])
 
-    def get_gr(self, wave_nm: float, grat_master_num: int) -> float:
-        if grat_master_num == 1229:
+    def get_gr(self, wave_nm: float, grating_id: int|str = 1229) -> float:
+        if grating_id == 1229:
             return float(self._interp_with_linear_extrapolation(np.asarray([wave_nm], dtype=float), self.std_wave_grid, self.mean_1229)[0])
-        if grat_master_num == 1294:
+        if grating_id == 1294:
             return float(self._interp_with_linear_extrapolation(np.asarray([wave_nm], dtype=float), self.grat_1294["wave"], self.grat_1294["tp"])[0])
-        raise ValueError(f"Unsupported grating '{grat_master_num}'. Supported: 1229, 1294")
+        if grating_id == "thorlabs":
+            return float(self._interp_with_linear_extrapolation(np.asarray([wave_nm], dtype=float), self.grat_gr50a["wave"], self.grat_gr50a["tp"])[0])
+        raise ValueError(f"Unsupported grating '{grating_id}'. Supported: 1229, 1294, 'thorlabs'")
 
     def get_fib_att(self, wave_nm: float) -> float:
         return self._interp_scalar(wave_nm, self.fiber_att["wave"], self.fiber_att["tp"])
@@ -161,7 +164,7 @@ class ETCCalculator:
         self,
         wave_nm: np.ndarray,
         camera_model: str,
-        grat_master_num: int,
+        grating_id: int|str,
         airmass_model: str,
         lens: float,
         throughput_toggles: Optional[Dict[str, bool]] = None,
@@ -177,7 +180,7 @@ class ETCCalculator:
             toggles.update(throughput_toggles)
 
         detector = np.array([self.get_qe(w, camera_model=camera_model) for w in wave_nm])
-        grating = np.array([max(self.get_gr(w, grat_master_num) - 0.1, 0.0) for w in wave_nm])
+        grating = np.array([max(self.get_gr(w, grating_id) - 0.1, 0.0) for w in wave_nm])
         fiber = np.array([self.get_fib_att(w) for w in wave_nm])
         airmass = np.array([self.get_airmass_ext(w, airmass_model) for w in wave_nm])
         lens_arr = np.full_like(wave_nm, fill_value=lens, dtype=float)
@@ -220,7 +223,7 @@ class ETCCalculator:
         read_noise_e: Optional[float] = None,
         pix_scale: float = 0.8,
         camera_model: str = "QHY268",
-        grat_master_num: int = 1229,
+        grating_id: int = 1229,
         airmass_model: str = "average",
         lens: float = 0.99,
         t_diam: float = 1250,
@@ -266,7 +269,7 @@ class ETCCalculator:
             components = self.get_throughput_components(
                 wave_bin,
                 camera_model=camera_model,
-                grat_master_num=grat_master_num,
+                grating_id=grating_id,
                 airmass_model=airmass_model,
                 lens=lens,
                 throughput_toggles=throughput_toggles,
@@ -315,7 +318,7 @@ class ETCCalculator:
                 "dark_current": dark_current,
                 "camera_model": camera_model,
                 "read_noise_e": read_noise_e,
-                "grating": grat_master_num,
+                "grating": grating_id,
                 "airmass_model": airmass_model,
             },
             "throughput_plot": {
@@ -337,7 +340,7 @@ if __name__ == "__main__":
         z=0.05,
         wave_centers=[600, 700],
         binsize=5,
-        grat_master_num=1294,
+        grating_id=1294,
     )
     for row in result["bins"]:
         print(f"{row.wave_center_nm:.1f} nm -> SNR={row.snr:.3f}")
