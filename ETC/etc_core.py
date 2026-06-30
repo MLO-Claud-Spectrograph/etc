@@ -77,9 +77,8 @@ class ETCCalculator:
         self.grat_1229_p = np.sort(np.genfromtxt(self.csv_root / "master 1229 P plane.csv", dtype=dtype, delimiter=","))
         self.grat_1229_s = np.sort(np.genfromtxt(self.csv_root / "master 1229 S plane.csv", dtype=dtype, delimiter=","))
         self.grat_gr50a = np.sort(np.genfromtxt(self.csv_root / "gr50a-0305_efficiency-780.csv", dtype=dtype, delimiter=","))
-        self.fiber_att = np.sort(np.genfromtxt(self.csv_root / "fiber_attenuation.csv", dtype=dtype, delimiter=","))
-
-        self.fiber_att["tp"] = 10 ** (-(self.fiber_att["tp"] * (self.fiber_length_m/1000.0)) / 10)
+        self._fiber_att_base = np.sort(np.genfromtxt(self.csv_root / "fiber_attenuation.csv", dtype=dtype, delimiter=","))
+        self.fiber_att = self._fiber_att_for_length(self.fiber_length_m)
 
         self.std_wave_grid = np.arange(314.0, 901.0)
         p_interp = self._interp_with_linear_extrapolation(self.std_wave_grid, self.grat_1229_p["wave"], self.grat_1229_p["tp"])
@@ -142,6 +141,13 @@ class ETCCalculator:
     def get_fib_att(self, wave_nm: float) -> float:
         return self._interp_scalar(wave_nm, self.fiber_att["wave"], self.fiber_att["tp"])
 
+    def _fiber_att_for_length(self, fiber_length_m: Optional[float]) -> np.ndarray:
+        if fiber_length_m is None:
+            fiber_length_m = self.fiber_length_m
+        fiber_att = np.array(self._fiber_att_base, copy=True)
+        fiber_att["tp"] = 10 ** (-(fiber_att["tp"] * (fiber_length_m / 1000.0)) / 10)
+        return fiber_att
+
     def get_airmass_ext(self, wave_nm: float, model: str) -> float:
         if model not in self.airmass_models:
             raise ValueError(
@@ -167,6 +173,7 @@ class ETCCalculator:
         grating_id: int|str,
         airmass_model: str,
         lens: float,
+        fiber_length_m: Optional[float] = None,
         throughput_toggles: Optional[Dict[str, bool]] = None,
     ) -> Dict[str, np.ndarray]:
         toggles = {
@@ -181,7 +188,8 @@ class ETCCalculator:
 
         detector = np.array([self.get_qe(w, camera_model=camera_model) for w in wave_nm])
         grating = np.array([max(self.get_gr(w, grating_id) - 0.1, 0.0) for w in wave_nm])
-        fiber = np.array([self.get_fib_att(w) for w in wave_nm])
+        fiber_curve = self._fiber_att_for_length(fiber_length_m)
+        fiber = np.array([self._interp_scalar(w, fiber_curve["wave"], fiber_curve["tp"]) for w in wave_nm])
         airmass = np.array([self.get_airmass_ext(w, airmass_model) for w in wave_nm])
         lens_arr = np.full_like(wave_nm, fill_value=lens, dtype=float)
 
@@ -226,6 +234,7 @@ class ETCCalculator:
         grating_id: int = 1229,
         airmass_model: str = "average",
         lens: float = 0.99,
+        fiber_length_m: Optional[float] = None,
         t_diam: float = 1250,
         temp: float = -10,
         throughput_toggles: Optional[Dict[str, bool]] = None,
@@ -272,6 +281,7 @@ class ETCCalculator:
                 grating_id=grating_id,
                 airmass_model=airmass_model,
                 lens=lens,
+                fiber_length_m=fiber_length_m,
                 throughput_toggles=throughput_toggles,
             )
 

@@ -231,6 +231,7 @@ class ETCGui(tk.Tk):
             ("read_noise_e", self._read_noise_default_placeholder, "e-", "Read Noise:"),
             ("pix_scale", "0.8", "arcsec/pix", "Pix Scale:"),
             ("lens", "0.99", "", "Lens Throughput:"),
+            ("fiber_length_m", "10", "m", "Fiber Length:"),
             ("t_diam_mm", "1250", "mm", "Telescope Diameter:"),
             ("temp_c", "-10", "C", "Temperature:"),
         ]
@@ -381,6 +382,7 @@ class ETCGui(tk.Tk):
                 "grating_id": int(gr) if (gr := self.grating.get()).isdigit() else gr,
                 "airmass_model": self._airmass_model_key(self.airmass.get()),
                 "lens": float(self.entries["lens"].value()),
+                "fiber_length_m": float(self.entries["fiber_length_m"].value()),
                 "t_diam": float(self.entries["t_diam_mm"].value()),
                 "temp": float(self.entries["temp_c"].value()),
                 "throughput_toggles": {k: v.get() for k, v in self.toggle_vars.items()},
@@ -390,14 +392,15 @@ class ETCGui(tk.Tk):
 
     def _compute(self):
         try:
-            result = self.calc.get_SNR_from_spectrum(**self._read_inputs())
+            params = self._read_inputs()
+            calc = ETCCalculator(fiber_length_m=params["fiber_length_m"])
+            result = calc.get_SNR_from_spectrum(**params)
         except Exception as exc:
             messagebox.showerror("SNR error", str(exc))
             return
 
         self.output.delete("1.0", tk.END)
         self.output.insert(tk.END, f"Camera model: {result['meta']['camera_model']}\n")
-        self.output.insert(tk.END, f"Read noise: {result['meta']['read_noise_e']:.2f} e-\n")
         self.output.insert(tk.END, f"Grating: {result['meta']['grating']}\n")
         self.output.insert(tk.END, f"Airmass model: {self._airmass_display_label(result['meta']['airmass_model'])}\n\n")
 
@@ -419,9 +422,10 @@ class ETCGui(tk.Tk):
     def _plot_throughput(self):
         try:
             params = self._read_inputs()
-            spec = self.calc.load_spectrum(params["spectrum_file"], params["z"])
+            calc = ETCCalculator(fiber_length_m=params["fiber_length_m"])
+            spec = calc.load_spectrum(params["spectrum_file"], params["z"])
             wave = spec["wave"]
-            components = self.calc.get_throughput_components(
+            components = calc.get_throughput_components(
                 wave,
                 camera_model=params["camera_model"],
                 grating_id=params["grating_id"],
