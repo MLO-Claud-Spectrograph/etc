@@ -28,7 +28,7 @@ class SNRBinResult:
 class ETCCalculator:
     CAMERA_QE_FILES: Dict[str, str] = {
         "QHY268": "qhy268_qe.csv",
-        "Kepler": "Kepler_qe.csv",
+        "Kepler": "KL400BI_qe.csv",
         "Moravian": "Moravian_qe.csv",
     }
     CAMERA_READ_NOISE_DEFAULTS: Dict[str, float] = {
