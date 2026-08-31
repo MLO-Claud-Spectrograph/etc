@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spectrograph-etc"
+version = "0.1.0"
+description = "Exposure-time calculator for the MLO spectrograph"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "shared-data",
+    "specreduce",
+]
+
+[project.scripts]
+spectrograph-etc = "etc.gui:run"
+
+[tool.setuptools]
+packages = ["etc"]
+package-dir = {etc = "app"}

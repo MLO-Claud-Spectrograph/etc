@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
+from importlib.resources import as_file
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
@@ -42,7 +44,7 @@ AIRMass_MODEL_LABELS = {
 }
 AIRMass_DISPLAY_TO_KEY = {label: key for key, label in AIRMass_MODEL_LABELS.items()}
 
-from etc_core import ETCCalculator, get_default_spectrum_file
+from .core import ETCCalculator, get_default_spectrum_file
 
 
 class PlaceholderEntry(ttk.Entry):
@@ -148,6 +150,9 @@ class ETCGui(tk.Tk):
         style.configure('TCombobox', fieldbackground='#ffffff', foreground='#000000')
         style.configure('NoOutline.TCombobox', fieldbackground=GUI_BG, foreground='white', relief='flat', borderwidth=0)
         self.configure(bg=GUI_BG)
+
+        self._resource_stack = ExitStack()
+        self._default_spectrum_path = self._resource_stack.enter_context(as_file(get_default_spectrum_file()))
 
         self.calc = ETCCalculator()
 
@@ -337,12 +342,16 @@ class ETCGui(tk.Tk):
         d.wait_window()
 
     def _prompt_for_spectrum(self):
-        # Force user to choose a reference spectrum at startup. Start in repo 'data' directory.
-        data_dir = Path(__file__).resolve().parents[1] / "data" / "SN_ref_spectra"
+        # Force user to choose a reference spectrum, starting with the packaged default.
+        data_dir = self._default_spectrum_path.parent
         while not self.spectrum_path.get():
-            self._browse(initial_dir=str(data_dir) if data_dir.exists() else None)
+            self._browse(initial_dir=str(data_dir))
             if not self.spectrum_path.get():
                 messagebox.showwarning("Reference spectrum required", "Please select a reference spectrum file to continue.")
+
+    def destroy(self):
+        self._resource_stack.close()
+        super().destroy()
 
     def _on_spectrum_focus_in(self, _event=None):
         if self.path_entry.cget('fg') == '#ffffff':
@@ -468,7 +477,10 @@ class ETCGui(tk.Tk):
         fig.tight_layout()
         plt.show()
 
-
-if __name__ == "__main__":
+def run():
     app = ETCGui()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    run()

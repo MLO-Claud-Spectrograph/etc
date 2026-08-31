@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 import numpy as np
+from shared_data import CSV_FILES, REFERENCE_SPECTRA
 
 try:
     from specreduce.calibration_data import AtmosphericExtinction, SUPPORTED_EXTINCTION_MODELS
@@ -38,10 +39,15 @@ class ETCCalculator:
     }
 
     def __init__(self, data_root: Optional[Path] = None, fiber_length_m: Optional[float] = 10.0):
-        self.data_root = Path(data_root) if data_root else Path(__file__).resolve().parents[1] / "data"
-        self.csv_root = self.data_root / "csv files"
+        self.data_root = Path(data_root) if data_root else None
+        self.csv_root = self.data_root / "csv_files" if self.data_root else None
         self.fiber_length_m = fiber_length_m
         self._load_curves()
+
+    def _load_curve(self, filename: str, dtype) -> np.ndarray:
+        source = self.csv_root / filename if self.csv_root else CSV_FILES[Path(filename).stem]
+        with source.open("rb") as stream:
+            return np.sort(np.genfromtxt(stream, dtype=dtype, delimiter=","))
 
     @staticmethod
     def _interp_with_linear_extrapolation(x: np.ndarray, xp: np.ndarray, fp: np.ndarray) -> np.ndarray:
@@ -66,18 +72,16 @@ class ETCCalculator:
 
         self.camera_qe_curves: Dict[str, np.ndarray] = {}
         for camera_model, filename in self.CAMERA_QE_FILES.items():
-            curve = np.sort(
-                np.genfromtxt(self.csv_root / filename, dtype=dtype, delimiter=",")
-            )
+            curve = self._load_curve(filename, dtype)
             # Some QE files are stored as percentages (0-100) while others are fractions (0-1).
             if np.nanmax(curve["tp"]) > 1.5:
                 curve["tp"] = curve["tp"] / 100.0
             self.camera_qe_curves[camera_model] = curve
-        self.grat_1294 = np.sort(np.genfromtxt(self.csv_root / "master 1294 unpolarized.csv", dtype=dtype, delimiter=","))
-        self.grat_1229_p = np.sort(np.genfromtxt(self.csv_root / "master 1229 P plane.csv", dtype=dtype, delimiter=","))
-        self.grat_1229_s = np.sort(np.genfromtxt(self.csv_root / "master 1229 S plane.csv", dtype=dtype, delimiter=","))
-        self.grat_gr50a = np.sort(np.genfromtxt(self.csv_root / "gr50a-0305_efficiency-780.csv", dtype=dtype, delimiter=","))
-        self._fiber_att_base = np.sort(np.genfromtxt(self.csv_root / "fiber_attenuation.csv", dtype=dtype, delimiter=","))
+        self.grat_1294 = self._load_curve("master 1294 unpolarized.csv", dtype)
+        self.grat_1229_p = self._load_curve("master 1229 P plane.csv", dtype)
+        self.grat_1229_s = self._load_curve("master 1229 S plane.csv", dtype)
+        self.grat_gr50a = self._load_curve("gr50a-0305_efficiency-780.csv", dtype)
+        self._fiber_att_base = self._load_curve("fiber_attenuation.csv", dtype)
         self.fiber_att = self._fiber_att_for_length(self.fiber_length_m)
 
         self.std_wave_grid = np.arange(314.0, 901.0)
@@ -160,8 +164,9 @@ class ETCCalculator:
         dc_vals = np.array([0.00053145, 0.00062832, 0.001309, 0.0018326, 0.0036652, 0.0059756, 0.010472, 0.019111, 0.036913], dtype=float)
         return float(np.interp(temp_c, plot_temps_dc, dc_vals))
 
-    def load_spectrum(self, spectrum_file: Path | str, z: float) -> np.ndarray:
-        spec = np.genfromtxt(spectrum_file, dtype=[("wave", float), ("flux", float)])
+    def load_spectrum(self, spectrum_file, z: float) -> np.ndarray:
+        dtype = [("wave", float), ("flux", float)]
+        spec = np.genfromtxt(spectrum_file, dtype=dtype)
         spec["wave"] *= 1.0 / (1.0 + z)
         spec["wave"] /= 10.0
         return spec
@@ -339,7 +344,7 @@ class ETCCalculator:
 
 
 def get_default_spectrum_file() -> Path:
-    return Path(__file__).resolve().parents[1] / "data" / "SN_ref_spectra" / "SNIa_max_z0p05.txt"
+    return REFERENCE_SPECTRA["SNIa_max_z0p05"]
 
 
 if __name__ == "__main__":
