@@ -7,6 +7,11 @@ name = "spectrograph-etc"
 version = "0.1.0"
 description = "Exposure-time calculator for the MLO spectrograph"
 readme = "README.md"
+authors = [
+    {name = "Caden Gobat", email = "cgobat@sdsu.edu"},
+    {name = "Ian Beard", email = "ibeard5884@sdsu.edu"},
+    {name = "Madi Catalano", email = "madicatalano425@berkeley.edu"},
+]
 requires-python = ">=3.10"
 dependencies = [
     "astropy",
