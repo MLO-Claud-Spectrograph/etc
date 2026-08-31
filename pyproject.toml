@@ -9,10 +9,11 @@ description = "Exposure-time calculator for the MLO spectrograph"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "astropy",
     "matplotlib",
     "numpy",
     "shared-data",
-    "specreduce",
+    "spectrograph-sim",
 ]
 
 [project.scripts]

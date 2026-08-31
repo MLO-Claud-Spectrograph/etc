@@ -1,20 +1,99 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
 
 import numpy as np
+from astropy import constants as const, units as u
 from shared_data import CSV_FILES, REFERENCE_SPECTRA
+from simulator import (
+    AtmosphericExtinction,
+    DetectorModel,
+    InstrumentSimulator,
+    SpectrographModel,
+    ThroughputCurve,
+    f_lambda_to_photon_flux_density,
+)
+from simulator.core import FLUX_DENSITY_UNIT, TELESCOPE_AREA
 
-try:
-    from specreduce.calibration_data import AtmosphericExtinction, SUPPORTED_EXTINCTION_MODELS
-except Exception:  # pragma: no cover - optional dependency fallback
-    AtmosphericExtinction = None
-    SUPPORTED_EXTINCTION_MODELS = []
+TELESCOPE_FOCAL_LENGTH = 8125 * u.mm
+DEFAULT_FIBER_LENGTH = 10 * u.m
+DEFAULT_AIRMASS = 1.3
 
-PLANCK_H = 6.62607015e-34
-LIGHT_C = 2.99792458e8
+# Approximate Johnson B/V photon-counting response curves. Wavelengths are Angstroms.
+PHOTOMETRIC_BANDPASSES: dict[str, np.ndarray] = {
+    "B": np.array(
+        [
+            [3600, 0.000],
+            [3700, 0.030],
+            [3800, 0.134],
+            [3900, 0.567],
+            [4000, 0.920],
+            [4100, 0.978],
+            [4200, 1.000],
+            [4300, 0.978],
+            [4400, 0.935],
+            [4500, 0.853],
+            [4600, 0.740],
+            [4700, 0.640],
+            [4800, 0.536],
+            [4900, 0.424],
+            [5000, 0.325],
+            [5100, 0.235],
+            [5200, 0.150],
+            [5300, 0.095],
+            [5400, 0.043],
+            [5500, 0.009],
+            [5600, 0.000],
+        ],
+        dtype=float,
+    ),
+    "V": np.array(
+        [
+            [4700, 0.000],
+            [4800, 0.030],
+            [4900, 0.163],
+            [5000, 0.458],
+            [5100, 0.780],
+            [5200, 0.967],
+            [5300, 1.000],
+            [5400, 0.973],
+            [5500, 0.898],
+            [5600, 0.792],
+            [5700, 0.684],
+            [5800, 0.574],
+            [5900, 0.461],
+            [6000, 0.359],
+            [6100, 0.270],
+            [6200, 0.197],
+            [6300, 0.135],
+            [6400, 0.081],
+            [6500, 0.045],
+            [6600, 0.025],
+            [6700, 0.017],
+            [6800, 0.013],
+            [6900, 0.009],
+            [7000, 0.000],
+        ],
+        dtype=float,
+    ),
+}
+
+VEGA_ZERO_POINT_JY = {
+    "B": 4130.0,
+    "V": 3781.0,
+}
+AB_ZERO_POINT_JY = 3631.0
+
+
+@dataclass(frozen=True)
+class CameraConfig:
+    qe_resource: str
+    nx: int
+    ny: int
+    pixel_size: u.Quantity
+    read_noise: u.Quantity
 
 
 @dataclass
@@ -23,205 +102,383 @@ class SNRBinResult:
     source_counts: float
     sky_counts: float
     snr: float
-    component_averages: Dict[str, float]
+    component_averages: dict[str, float]
 
 
 class ETCCalculator:
-    CAMERA_QE_FILES: Dict[str, str] = {
-        "QHY268": "qhy268_qe.csv",
-        "Kepler": "gsense400bsi_qe.csv",
-        "Moravian": "gsense4040bsi_qe.csv",
+    CAMERA_CONFIGS = {
+        "QHY268": CameraConfig(
+            qe_resource="qhy268_qe",
+            nx=6280,
+            ny=4210,
+            pixel_size=3.76 * u.um,
+            read_noise=2.3 * u.electron,
+        ),
+        "Kepler": CameraConfig(
+            qe_resource="gsense400bsi_qe",
+            nx=2048,
+            ny=2048,
+            pixel_size=11 * u.um,
+            read_noise=1.6 * u.electron,
+        ),
+        "Moravian": CameraConfig(
+            qe_resource="gsense4040bsi_qe",
+            nx=4096,
+            ny=4096,
+            pixel_size=9 * u.um,
+            read_noise=3.9 * u.electron,
+        ),
     }
-    CAMERA_READ_NOISE_DEFAULTS: Dict[str, float] = {
-        "QHY268": 2.3,
-        "Kepler": 1.6,
-        "Moravian": 3.9,
-    }
 
-    def __init__(self, data_root: Optional[Path] = None, fiber_length_m: Optional[float] = 10.0):
-        self.data_root = Path(data_root) if data_root else None
-        self.csv_root = self.data_root / "csv_files" if self.data_root else None
-        self.fiber_length_m = fiber_length_m
-        self._load_curves()
+    THROUGHPUT_COMPONENTS = (
+        "atmosphere",
+        "fiber",
+        "misc",
+        "collimator",
+        "grating",
+        "window",
+        "detector",
+    )
 
-    def _load_curve(self, filename: str, dtype) -> np.ndarray:
-        source = self.csv_root / filename if self.csv_root else CSV_FILES[Path(filename).stem]
-        with source.open("rb") as stream:
-            return np.sort(np.genfromtxt(stream, dtype=dtype, delimiter=","))
-
-    @staticmethod
-    def _interp_with_linear_extrapolation(x: np.ndarray, xp: np.ndarray, fp: np.ndarray) -> np.ndarray:
-        values = np.interp(x, xp, fp)
-        if xp.size < 2:
-            return values
-
-        fit_points = min(5, xp.size)
-        left_slope, left_intercept = np.polyfit(xp[:fit_points], fp[:fit_points], 1)
-        right_slope, right_intercept = np.polyfit(xp[-fit_points:], fp[-fit_points:], 1)
-
-        left_mask = x < xp[0]
-        right_mask = x > xp[-1]
-        if np.any(left_mask):
-            values[left_mask] = left_slope * x[left_mask] + left_intercept
-        if np.any(right_mask):
-            values[right_mask] = right_slope * x[right_mask] + right_intercept
-        return values
-
-    def _load_curves(self) -> None:
-        dtype = [("wave", float), ("tp", float)]
-
-        self.camera_qe_curves: Dict[str, np.ndarray] = {}
-        for camera_model, filename in self.CAMERA_QE_FILES.items():
-            curve = self._load_curve(filename, dtype)
-            # Some QE files are stored as percentages (0-100) while others are fractions (0-1).
-            if np.nanmax(curve["tp"]) > 1.5:
-                curve["tp"] = curve["tp"] / 100.0
-            self.camera_qe_curves[camera_model] = curve
-        self.grat_1294 = self._load_curve("master 1294 unpolarized.csv", dtype)
-        self.grat_1229_p = self._load_curve("master 1229 P plane.csv", dtype)
-        self.grat_1229_s = self._load_curve("master 1229 S plane.csv", dtype)
-        self.grat_gr50a = self._load_curve("gr50a-0305_efficiency-780.csv", dtype)
-        self._fiber_att_base = self._load_curve("fiber_attenuation.csv", dtype)
-        self.fiber_att = self._fiber_att_for_length(self.fiber_length_m)
-
-        self.std_wave_grid = np.arange(314.0, 901.0)
-        p_interp = self._interp_with_linear_extrapolation(self.std_wave_grid, self.grat_1229_p["wave"], self.grat_1229_p["tp"])
-        s_interp = self._interp_with_linear_extrapolation(self.std_wave_grid, self.grat_1229_s["wave"], self.grat_1229_s["tp"])
-        self.mean_1229 = np.nanmean([p_interp, s_interp], axis=0)
-
-        self.airmass_models: Dict[str, np.ndarray] = {}
-        if AtmosphericExtinction is not None and SUPPORTED_EXTINCTION_MODELS:
-            interp_models = []
-            for model in SUPPORTED_EXTINCTION_MODELS:
-                ext = AtmosphericExtinction(model=model)
-                wave_nm = np.asarray(ext.spectral_axis) / 10.0
-                transmission = np.asarray(ext.transmission)
-                curve = np.interp(self.std_wave_grid, wave_nm, transmission)
-                self.airmass_models[model] = curve
-                interp_models.append(curve)
-            self.airmass_models["average"] = np.nanmean(interp_models, axis=0)
-        else:
-            self.airmass_models["average"] = np.ones_like(self.std_wave_grid)
+    def __init__(self, fiber_length_m: float = DEFAULT_FIBER_LENGTH.to_value(u.m)):
+        self.fiber_length = float(fiber_length_m) * u.m
+        if self.fiber_length < 0 * u.m:
+            raise ValueError("Fiber length cannot be negative.")
 
     @property
-    def available_gratings(self) -> List[int]:
+    def available_gratings(self) -> list[int | str]:
         return [1229, 1294, "thorlabs"]
 
     @property
-    def available_airmass_models(self) -> List[str]:
-        return sorted(self.airmass_models.keys(), key=lambda m: (m != "average", m))
+    def available_camera_models(self) -> list[str]:
+        return list(self.CAMERA_CONFIGS)
 
     @property
-    def available_camera_models(self) -> List[str]:
-        return list(self.CAMERA_QE_FILES.keys())
+    def available_magnitude_bands(self) -> list[str]:
+        return list(PHOTOMETRIC_BANDPASSES)
 
-    def _validate_camera_model(self, camera_model: str) -> None:
-        if camera_model not in self.CAMERA_QE_FILES:
+    @property
+    def available_magnitude_systems(self) -> list[str]:
+        return ["Vega", "AB"]
+
+    def _camera_config(self, camera_model: str) -> CameraConfig:
+        try:
+            return self.CAMERA_CONFIGS[camera_model]
+        except KeyError as exc:
+            supported = ", ".join(self.available_camera_models)
             raise ValueError(
-                f"Unsupported camera model '{camera_model}'. Supported: {', '.join(self.available_camera_models)}"
-            )
+                f"Unsupported camera model '{camera_model}'. Supported: {supported}"
+            ) from exc
+
+    def detector_model(self, camera_model: str) -> DetectorModel:
+        camera = self._camera_config(camera_model)
+        return DetectorModel(
+            nx=camera.nx,
+            ny=camera.ny,
+            pixel_size=camera.pixel_size,
+            read_noise=camera.read_noise,
+        )
+
+    def spectrograph_model(self, camera_model: str) -> SpectrographModel:
+        return SpectrographModel(
+            detector=self.detector_model(camera_model),
+            groove_density=300 / u.mm,
+            incidence_angle=32 * u.deg,
+            diffraction_angle=-20 * u.deg,
+            collimator_focal_length=180 * u.mm,
+            camera_focal_length=100 * u.mm,
+            fiber_core_diameter=105 * u.um,
+            diffraction_order=1,
+        )
 
     def default_read_noise_for_camera(self, camera_model: str) -> float:
-        self._validate_camera_model(camera_model)
-        return self.CAMERA_READ_NOISE_DEFAULTS[camera_model]
+        return self._camera_config(camera_model).read_noise.to_value(u.electron)
 
-    def _interp_scalar(self, wave_nm: float, wave_grid: np.ndarray, values: np.ndarray) -> float:
-        return float(np.interp(wave_nm, wave_grid, values))
+    def dispersion_for_camera(self, camera_model: str) -> float:
+        return abs(
+            self.spectrograph_model(camera_model).dispersion.to_value(u.nm / u.pixel)
+        )
 
-    def get_qe(self, wave_nm: float, camera_model: str = "QHY268") -> float:
-        self._validate_camera_model(camera_model)
-        curve = self.camera_qe_curves[camera_model]
-        return self._interp_scalar(wave_nm, curve["wave"], curve["tp"])
+    def spatial_aperture_for_camera(self, camera_model: str) -> float:
+        return self.spectrograph_model(camera_model).spatial_fwhm_px.to_value(u.pixel)
 
-    def get_gr(self, wave_nm: float, grating_id: int|str = 1229) -> float:
-        if grating_id == 1229:
-            return float(self._interp_with_linear_extrapolation(np.asarray([wave_nm], dtype=float), self.std_wave_grid, self.mean_1229)[0])
+    @property
+    def fiber_sky_area_arcsec2(self) -> float:
+        spectrograph = self.spectrograph_model(self.available_camera_models[0])
+        angular_diameter_rad = (
+            spectrograph.fiber_core_diameter / TELESCOPE_FOCAL_LENGTH
+        ).to_value(u.dimensionless_unscaled)
+        angular_diameter_arcsec = angular_diameter_rad * u.rad.to(u.arcsec)
+        return float(np.pi * (angular_diameter_arcsec / 2) ** 2)
+
+    @staticmethod
+    def _read_curve(resource_key: str) -> tuple[np.ndarray, np.ndarray]:
+        values = np.loadtxt(CSV_FILES[resource_key], delimiter=",")
+        wavelength = np.asarray(values[:, 0], dtype=float)
+        throughput = np.asarray(values[:, 1], dtype=float)
+        order = np.argsort(wavelength)
+        wavelength = wavelength[order]
+        throughput = throughput[order]
+        if np.nanmax(throughput) > 1.5:
+            throughput = throughput / 100.0
+        return wavelength, throughput
+
+    def _fiber_curve(self, fiber_length_m: float | None = None) -> ThroughputCurve:
+        wavelength_nm, attenuation_db_per_km = self._read_curve("fiber_attenuation")
+        length = self.fiber_length if fiber_length_m is None else float(fiber_length_m) * u.m
+        if length < 0 * u.m:
+            raise ValueError("Fiber length cannot be negative.")
+        transmission = 10 ** (
+            -attenuation_db_per_km * length.to_value(u.km) / 10
+        )
+        return ThroughputCurve(
+            wavelength_nm * u.nm,
+            transmission,
+            name="fiber",
+        )
+
+    def _grating_curve(self, grating_id: int | str) -> ThroughputCurve:
         if grating_id == 1294:
-            return float(self._interp_with_linear_extrapolation(np.asarray([wave_nm], dtype=float), self.grat_1294["wave"], self.grat_1294["tp"])[0])
-        if grating_id == "thorlabs":
-            return float(self._interp_with_linear_extrapolation(np.asarray([wave_nm], dtype=float), self.grat_gr50a["wave"], self.grat_gr50a["tp"])[0])
-        raise ValueError(f"Unsupported grating '{grating_id}'. Supported: 1229, 1294, 'thorlabs'")
-
-    def get_fib_att(self, wave_nm: float) -> float:
-        return self._interp_scalar(wave_nm, self.fiber_att["wave"], self.fiber_att["tp"])
-
-    def _fiber_att_for_length(self, fiber_length_m: Optional[float]) -> np.ndarray:
-        if fiber_length_m is None:
-            fiber_length_m = self.fiber_length_m
-        fiber_att = np.array(self._fiber_att_base, copy=True)
-        fiber_att["tp"] = 10 ** (-(fiber_att["tp"] * (fiber_length_m / 1000.0)) / 10)
-        return fiber_att
-
-    def get_airmass_ext(self, wave_nm: float, model: str) -> float:
-        if model not in self.airmass_models:
-            raise ValueError(
-                f"Unsupported airmass model '{model}'. Supported: {', '.join(self.available_airmass_models)}"
+            return ThroughputCurve.from_csv(
+                CSV_FILES["master 1294 unpolarized"],
+                name="grating",
             )
-        return self._interp_scalar(wave_nm, self.std_wave_grid, self.airmass_models[model])
+        if grating_id == "thorlabs":
+            return ThroughputCurve.from_csv(
+                CSV_FILES["gr50a-0305_efficiency-780"],
+                name="grating",
+            )
+        if grating_id != 1229:
+            raise ValueError(
+                f"Unsupported grating '{grating_id}'. Supported: 1229, 1294, 'thorlabs'"
+            )
 
-    def get_dark_current(self, temp_c: float) -> float:
-        plot_temps_dc = np.array([-20, -15, -10, -5, 0, 5, 10, 15, 20], dtype=float)
-        dc_vals = np.array([0.00053145, 0.00062832, 0.001309, 0.0018326, 0.0036652, 0.0059756, 0.010472, 0.019111, 0.036913], dtype=float)
-        return float(np.interp(temp_c, plot_temps_dc, dc_vals))
+        p_wave, p_efficiency = self._read_curve("master 1229 P plane")
+        s_wave, s_efficiency = self._read_curve("master 1229 S plane")
+        wave_min = min(p_wave.min(), s_wave.min())
+        wave_max = max(p_wave.max(), s_wave.max())
+        wavelength_nm = np.arange(np.floor(wave_min), np.ceil(wave_max) + 1)
+        p_interp = np.interp(wavelength_nm, p_wave, p_efficiency, left=np.nan, right=np.nan)
+        s_interp = np.interp(wavelength_nm, s_wave, s_efficiency, left=np.nan, right=np.nan)
+        efficiency = np.nanmean(np.vstack((p_interp, s_interp)), axis=0)
+        efficiency = np.nan_to_num(efficiency, nan=0.0)
+        return ThroughputCurve(
+            wavelength_nm * u.nm,
+            efficiency,
+            name="grating",
+        )
 
-    def load_spectrum(self, spectrum_file, z: float) -> np.ndarray:
-        dtype = [("wave", float), ("flux", float)]
-        spec = np.genfromtxt(spectrum_file, dtype=dtype)
-        spec["wave"] *= 1.0 / (1.0 + z)
-        spec["wave"] /= 10.0
-        return spec
+    def throughput_curves(
+        self,
+        camera_model: str,
+        grating_id: int | str,
+        airmass: float = DEFAULT_AIRMASS,
+        fiber_length_m: float | None = None,
+    ) -> dict[str, ThroughputCurve]:
+        if airmass <= 0:
+            raise ValueError("Airmass must be positive.")
+        camera = self._camera_config(camera_model)
+        return {
+            "atmosphere": AtmosphericExtinction(airmass=float(airmass)),
+            "fiber": self._fiber_curve(fiber_length_m),
+            "misc": ThroughputCurve(
+                np.array([3000.0, 10500.0]) * u.AA,
+                np.array([0.95, 0.95]),
+                name="misc",
+            ),
+            "collimator": ThroughputCurve.from_csv(
+                CSV_FILES["thorlabs_ar_coating"],
+                name="collimator",
+            ),
+            "grating": self._grating_curve(grating_id),
+            "window": ThroughputCurve.from_csv(
+                CSV_FILES["UVFS_coating"],
+                name="window",
+            ),
+            "detector": ThroughputCurve.from_csv(
+                CSV_FILES[camera.qe_resource],
+                name="detector",
+            ),
+        }
 
     def get_throughput_components(
         self,
         wave_nm: np.ndarray,
         camera_model: str,
-        grating_id: int|str,
-        airmass_model: str,
-        lens: float,
-        fiber_length_m: Optional[float] = None,
-        throughput_toggles: Optional[Dict[str, bool]] = None,
-    ) -> Dict[str, np.ndarray]:
-        toggles = {
-            "detector": True,
-            "grating": True,
-            "fiber": True,
-            "airmass": True,
-            "lens": True,
-        }
+        grating_id: int | str,
+        airmass: float = DEFAULT_AIRMASS,
+        fiber_length_m: float | None = None,
+        throughput_toggles: Mapping[str, bool] | None = None,
+    ) -> dict[str, np.ndarray]:
+        wavelength = np.asarray(wave_nm, dtype=float) * u.nm
+        curves = self.throughput_curves(
+            camera_model=camera_model,
+            grating_id=grating_id,
+            airmass=airmass,
+            fiber_length_m=fiber_length_m,
+        )
+        toggles = {name: True for name in self.THROUGHPUT_COMPONENTS}
         if throughput_toggles:
             toggles.update(throughput_toggles)
 
-        detector = np.array([self.get_qe(w, camera_model=camera_model) for w in wave_nm])
-        grating = np.array([max(self.get_gr(w, grating_id) - 0.1, 0.0) for w in wave_nm])
-        fiber_curve = self._fiber_att_for_length(fiber_length_m)
-        fiber = np.array([self._interp_scalar(w, fiber_curve["wave"], fiber_curve["tp"]) for w in wave_nm])
-        airmass = np.array([self.get_airmass_ext(w, airmass_model) for w in wave_nm])
-        lens_arr = np.full_like(wave_nm, fill_value=lens, dtype=float)
+        values = {name: curve(wavelength) for name, curve in curves.items()}
+        active_curves = [
+            curve
+            for name, curve in curves.items()
+            if toggles.get(name, True)
+        ]
+        simulator = InstrumentSimulator(
+            spectrograph=self.spectrograph_model(camera_model),
+            throughputs=active_curves,
+        )
+        values["total"] = simulator.combined_throughput(wavelength)
+        return values
 
-        total = np.ones_like(wave_nm, dtype=float)
-        for name, arr in {
-            "detector": detector,
-            "grating": grating,
-            "fiber": fiber,
-            "airmass": airmass,
-            "lens": lens_arr,
-        }.items():
-            if toggles.get(name, True):
-                total *= arr
+    @staticmethod
+    def get_dark_current(temp_c: float) -> float:
+        plot_temps_dc = np.array([-20, -15, -10, -5, 0, 5, 10, 15, 20], dtype=float)
+        dc_vals = np.array(
+            [
+                0.00053145,
+                0.00062832,
+                0.001309,
+                0.0018326,
+                0.0036652,
+                0.0059756,
+                0.010472,
+                0.019111,
+                0.036913,
+            ],
+            dtype=float,
+        )
+        return float(np.interp(temp_c, plot_temps_dc, dc_vals))
 
-        return {
-            "detector": detector,
-            "grating": grating,
-            "fiber": fiber,
-            "airmass": airmass,
-            "lens": lens_arr,
-            "total": total,
-        }
+    @staticmethod
+    def load_spectrum(spectrum_file: Path | str, z: float) -> np.ndarray:
+        spec = np.genfromtxt(spectrum_file, dtype=[("wave", float), ("flux", float)])
+        if spec.ndim == 0 or spec.size < 2:
+            raise ValueError("Spectrum must contain at least two wavelength/flux rows.")
+        spec = np.sort(spec, order="wave")
+        spec["wave"] /= 1.0 + z
+        spec["wave"] /= 10.0
+        return spec
 
-    def get_flux_density_w_m2_nm(self, wavelength_nm: float, mag_ab: float) -> float:
-        wavelength_m = wavelength_nm * 1e-9
-        f_nu = 3631e-26 * (10 ** (-mag_ab / 2.5))
-        return float(f_nu * LIGHT_C / (wavelength_m**2) * 1e-9)
+    def get_band_flux_density_jy(self, spectrum: np.ndarray, magnitude_band: str) -> float:
+        band = magnitude_band.upper()
+        if band not in PHOTOMETRIC_BANDPASSES:
+            supported = ", ".join(self.available_magnitude_bands)
+            raise ValueError(
+                f"Unsupported magnitude band '{magnitude_band}'. Supported: {supported}"
+            )
+
+        wave_angstrom = np.asarray(spectrum["wave"], dtype=float) * 10.0
+        flux_lambda = np.asarray(spectrum["flux"], dtype=float)
+        order = np.argsort(wave_angstrom)
+        wave_angstrom = wave_angstrom[order]
+        flux_lambda = flux_lambda[order]
+
+        bandpass = PHOTOMETRIC_BANDPASSES[band]
+        supported_wave = bandpass[bandpass[:, 1] > 0, 0]
+        finite_wave = wave_angstrom[np.isfinite(wave_angstrom)]
+        if (
+            finite_wave.size < 2
+            or finite_wave.min() > supported_wave.min()
+            or finite_wave.max() < supported_wave.max()
+        ):
+            raise ValueError(f"Spectrum does not fully cover the Johnson {band} band.")
+
+        response = np.interp(
+            wave_angstrom,
+            bandpass[:, 0],
+            bandpass[:, 1],
+            left=0.0,
+            right=0.0,
+        )
+        valid = (
+            np.isfinite(wave_angstrom)
+            & np.isfinite(flux_lambda)
+            & (wave_angstrom > 0)
+            & (response > 0)
+        )
+        if np.count_nonzero(valid) < 2:
+            raise ValueError(f"Spectrum does not adequately sample the Johnson {band} band.")
+
+        wave_valid = wave_angstrom[valid]
+        response_valid = response[valid]
+        flux_valid = flux_lambda[valid]
+        denominator = np.trapezoid(response_valid / wave_valid, x=wave_valid)
+        numerator = np.trapezoid(
+            flux_valid * wave_valid * response_valid,
+            x=wave_valid,
+        )
+        if denominator <= 0:
+            raise ValueError(f"Could not integrate the Johnson {band} bandpass.")
+
+        light_speed = const.c.to_value(u.AA / u.s)
+        flux_nu_cgs = numerator / (light_speed * denominator)
+        flux_nu_jy = float(flux_nu_cgs / 1e-23)
+        if not np.isfinite(flux_nu_jy) or flux_nu_jy <= 0:
+            raise ValueError(
+                f"Spectrum has non-positive synthetic flux in the Johnson {band} band."
+            )
+        return flux_nu_jy
+
+    def scale_spectrum_to_magnitude(
+        self,
+        spectrum: np.ndarray,
+        target_magnitude: float,
+        magnitude_band: str,
+        magnitude_system: str = "Vega",
+    ) -> tuple[np.ndarray, float]:
+        band = magnitude_band.upper()
+        system = magnitude_system.upper()
+        if system == "VEGA":
+            try:
+                zero_point_jy = VEGA_ZERO_POINT_JY[band]
+            except KeyError as exc:
+                supported = ", ".join(self.available_magnitude_bands)
+                raise ValueError(
+                    f"Unsupported magnitude band '{magnitude_band}'. Supported: {supported}"
+                ) from exc
+        elif system == "AB":
+            zero_point_jy = AB_ZERO_POINT_JY
+        else:
+            supported = ", ".join(self.available_magnitude_systems)
+            raise ValueError(
+                f"Unsupported magnitude system '{magnitude_system}'. Supported: {supported}"
+            )
+
+        current_flux_jy = self.get_band_flux_density_jy(spectrum, band)
+        target_flux_jy = zero_point_jy * 10 ** (-0.4 * target_magnitude)
+        scale_factor = float(target_flux_jy / current_flux_jy)
+        scaled_spectrum = np.array(spectrum, copy=True)
+        scaled_spectrum["flux"] *= scale_factor
+        return scaled_spectrum, scale_factor
+
+    @staticmethod
+    def _sky_flux_density(wavelength: u.Quantity, sky_brightness: float) -> u.Quantity:
+        flux_nu = (sky_brightness * u.ABmag).to(u.Jy)
+        return flux_nu.to(
+            FLUX_DENSITY_UNIT,
+            equivalencies=u.spectral_density(wavelength),
+        )
+
+    @staticmethod
+    def _integrated_electron_rate(
+        wavelength: u.Quantity,
+        flux_density: u.Quantity,
+        throughput: np.ndarray,
+    ) -> float:
+        photon_flux_density = f_lambda_to_photon_flux_density(
+            wavelength,
+            flux_density,
+            TELESCOPE_AREA,
+        )
+        wavelength_angstrom = wavelength.to_value(u.AA)
+        detected_rate_density = (
+            photon_flux_density * np.asarray(throughput, dtype=float)
+        ).to_value(1 / u.s / u.AA)
+        return float(np.trapezoid(detected_rate_density, x=wavelength_angstrom))
 
     def get_SNR_from_spectrum(
         self,
@@ -230,111 +487,143 @@ class ETCCalculator:
         z: float,
         wave_centers: Iterable[float],
         binsize: float,
-        dispersion: float = 0.14,
-        spacial_aperture: float = 13,
         sky_brightness: float = 21.6,
-        read_noise_e: Optional[float] = None,
-        pix_scale: float = 0.8,
         camera_model: str = "QHY268",
-        grating_id: int = 1229,
-        airmass_model: str = "average",
-        lens: float = 0.99,
-        fiber_length_m: Optional[float] = None,
-        t_diam: float = 1250,
+        grating_id: int | str = 1229,
+        airmass: float = DEFAULT_AIRMASS,
+        fiber_length_m: float | None = None,
         temp: float = -10,
-        throughput_toggles: Optional[Dict[str, bool]] = None,
-    ) -> Dict[str, object]:
-        wave_centers = np.array(list(wave_centers), dtype=float)
-
-        if np.any((wave_centers - binsize / 2) < 400) or np.any((wave_centers + binsize / 2) > 900):
-            raise ValueError(
-                f"One or more bin centers ({wave_centers}) are outside instrument range ({400+binsize}-{900-binsize} nm) for binsize={binsize}."
-            )
-        if not binsize > 0:
+        target_magnitude: float | None = None,
+        magnitude_band: str | None = None,
+        magnitude_system: str = "Vega",
+        throughput_toggles: Mapping[str, bool] | None = None,
+        dispersion: float | None = None,
+        spacial_aperture: float | None = None,
+        read_noise_e: float | None = None,
+    ) -> dict[str, object]:
+        wave_centers = np.asarray(list(wave_centers), dtype=float)
+        if wave_centers.size == 0:
+            raise ValueError("At least one wavelength-bin center is required.")
+        if exp_time <= 0:
+            raise ValueError("Exposure time must be positive.")
+        if binsize <= 0:
             raise ValueError("Bin size must be positive.")
+        if np.any((wave_centers - binsize / 2) < 400) or np.any(
+            (wave_centers + binsize / 2) > 900
+        ):
+            raise ValueError(
+                "One or more bins extend outside the ETC wavelength range (400-900 nm)."
+            )
         if temp < -20 or temp > 20:
             raise ValueError("Temperature must be between -20 and 20 C.")
-        self._validate_camera_model(camera_model)
+        if airmass <= 0:
+            raise ValueError("Airmass must be positive.")
 
+        self._camera_config(camera_model)
         spec = self.load_spectrum(spectrum_file, z)
-        n_wave = binsize / dispersion
-        n_spacial = spacial_aperture
-        n_total = n_wave * n_spacial
+        spectrum_scale_factor = 1.0
+        if target_magnitude is not None:
+            if not magnitude_band:
+                raise ValueError("A B or V magnitude band is required when scaling the spectrum.")
+            spec, spectrum_scale_factor = self.scale_spectrum_to_magnitude(
+                spec,
+                target_magnitude=target_magnitude,
+                magnitude_band=magnitude_band,
+                magnitude_system=magnitude_system,
+            )
+
+        if dispersion is None:
+            dispersion = self.dispersion_for_camera(camera_model)
+        if spacial_aperture is None:
+            spacial_aperture = self.spatial_aperture_for_camera(camera_model)
         if read_noise_e is None:
             read_noise_e = self.default_read_noise_for_camera(camera_model)
+        if dispersion <= 0 or spacial_aperture <= 0 or read_noise_e < 0:
+            raise ValueError("Detector extraction parameters must be non-negative and non-zero.")
+
+        n_wave = binsize / dispersion
+        n_total = n_wave * spacial_aperture
         read_noise_var = read_noise_e**2 * n_total
         dark_current = self.get_dark_current(temp)
         dark_counts = dark_current * n_total * exp_time
+        fiber_sky_area = self.fiber_sky_area_arcsec2
 
-        t_area = np.pi * (t_diam * 1e-3 / 2.0) ** 2
-
-        results: List[SNRBinResult] = []
+        results: list[SNRBinResult] = []
         plot_wave = None
         plot_components = None
 
         for center in wave_centers:
-            wave_min = center - binsize / 2.0
-            wave_max = center + binsize / 2.0
-            w = (spec["wave"] >= wave_min) & (spec["wave"] <= wave_max)
-            wave_bin = np.array(spec["wave"][w], dtype=float)
-            if wave_bin.size < 2:
+            wave_min = center - binsize / 2
+            wave_max = center + binsize / 2
+            in_bin = (spec["wave"] >= wave_min) & (spec["wave"] <= wave_max)
+            wave_bin_nm = np.asarray(spec["wave"][in_bin], dtype=float)
+            if wave_bin_nm.size < 2:
                 raise ValueError(f"No sufficient spectral samples in bin around {center} nm.")
 
             components = self.get_throughput_components(
-                wave_bin,
+                wave_bin_nm,
                 camera_model=camera_model,
                 grating_id=grating_id,
-                airmass_model=airmass_model,
-                lens=lens,
+                airmass=airmass,
                 fiber_length_m=fiber_length_m,
                 throughput_toggles=throughput_toggles,
             )
 
-            flux_erg_cm2_a = np.array(spec["flux"][w], dtype=float)
-            flux_w_m2_nm = flux_erg_cm2_a * 1e-2
+            wavelength = wave_bin_nm * u.nm
+            source_flux = np.asarray(spec["flux"][in_bin], dtype=float) * FLUX_DENSITY_UNIT
+            source_rate = self._integrated_electron_rate(
+                wavelength,
+                source_flux,
+                components["total"],
+            )
+            sky_rate_per_arcsec2 = self._integrated_electron_rate(
+                wavelength,
+                self._sky_flux_density(wavelength, sky_brightness),
+                components["total"],
+            )
 
-            wave_m = wave_bin * 1e-9
-            s_obs_spec = flux_w_m2_nm * wave_m / (PLANCK_H * LIGHT_C) * t_area * components["total"]
-            s_ob_bin = float(np.trapezoid(s_obs_spec, x=wave_bin))
+            source_counts = source_rate * exp_time
+            sky_counts = sky_rate_per_arcsec2 * fiber_sky_area * exp_time
+            variance = source_counts + sky_counts + dark_counts + read_noise_var
+            snr_bin = source_counts / np.sqrt(variance) if variance > 0 else 0.0
 
-            sky_flux = np.array([self.get_flux_density_w_m2_nm(w, sky_brightness) for w in wave_bin], dtype=float)
-            s_sky_spec = sky_flux * wave_m / (PLANCK_H * LIGHT_C) * t_area * components["total"]
-            s_sky_bin = float(np.trapezoid(s_sky_spec, x=wave_bin))
-
-            source_counts = s_ob_bin * exp_time
-            extraction_area = n_total * pix_scale**2
-            sky_counts = s_sky_bin * exp_time * extraction_area
-
-            denom = np.sqrt(source_counts + sky_counts + dark_counts + read_noise_var)
-            snr_bin = float(source_counts / denom) if denom > 0 else 0.0
-
-            component_averages = {k: float(np.mean(v)) for k, v in components.items()}
             results.append(
                 SNRBinResult(
                     wave_center_nm=float(center),
                     source_counts=float(source_counts),
                     sky_counts=float(sky_counts),
-                    snr=snr_bin,
-                    component_averages=component_averages,
+                    snr=float(snr_bin),
+                    component_averages={
+                        name: float(np.mean(values))
+                        for name, values in components.items()
+                    },
                 )
             )
 
             if plot_wave is None:
-                plot_wave = wave_bin
+                plot_wave = wave_bin_nm
                 plot_components = components
 
         return {
             "bins": results,
             "meta": {
-                "exp_time": exp_time,
-                "n_total_pixels": n_total,
-                "read_noise_var": read_noise_var,
-                "dark_counts": dark_counts,
-                "dark_current": dark_current,
+                "exp_time": float(exp_time),
+                "n_total_pixels": float(n_total),
+                "n_wave_pixels": float(n_wave),
+                "spatial_aperture_pix": float(spacial_aperture),
+                "dispersion_nm_per_pix": float(dispersion),
+                "read_noise_var": float(read_noise_var),
+                "dark_counts": float(dark_counts),
+                "dark_current": float(dark_current),
+                "fiber_sky_area_arcsec2": float(fiber_sky_area),
                 "camera_model": camera_model,
-                "read_noise_e": read_noise_e,
+                "read_noise_e": float(read_noise_e),
                 "grating": grating_id,
-                "airmass_model": airmass_model,
+                "airmass": float(airmass),
+                "spectrum_scale_factor": float(spectrum_scale_factor),
+                "target_magnitude": target_magnitude,
+                "magnitude_band": magnitude_band,
+                "magnitude_system": magnitude_system,
             },
             "throughput_plot": {
                 "wave_nm": plot_wave,
@@ -343,19 +632,5 @@ class ETCCalculator:
         }
 
 
-def get_default_spectrum_file() -> Path:
+def get_default_spectrum_file():
     return REFERENCE_SPECTRA["SNIa_max_z0p05"]
-
-
-if __name__ == "__main__":
-    calc = ETCCalculator()
-    result = calc.get_SNR_from_spectrum(
-        exp_time=7200,
-        spectrum_file=get_default_spectrum_file(),
-        z=0.05,
-        wave_centers=[600, 700],
-        binsize=5,
-        grating_id=1294,
-    )
-    for row in result["bins"]:
-        print(f"{row.wave_center_nm:.1f} nm -> SNR={row.snr:.3f}")
