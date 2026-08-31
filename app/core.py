@@ -80,10 +80,6 @@ PHOTOMETRIC_BANDPASSES: dict[str, np.ndarray] = {
     ),
 }
 
-VEGA_ZERO_POINT_JY = {
-    "B": 4130.0,
-    "V": 3781.0,
-}
 AB_ZERO_POINT_JY = 3631.0
 
 
@@ -156,10 +152,6 @@ class ETCCalculator:
     @property
     def available_magnitude_bands(self) -> list[str]:
         return list(PHOTOMETRIC_BANDPASSES)
-
-    @property
-    def available_magnitude_systems(self) -> list[str]:
-        return ["Vega", "AB"]
 
     def _camera_config(self, camera_model: str) -> CameraConfig:
         try:
@@ -428,28 +420,10 @@ class ETCCalculator:
         spectrum: np.ndarray,
         target_magnitude: float,
         magnitude_band: str,
-        magnitude_system: str = "Vega",
     ) -> tuple[np.ndarray, float]:
         band = magnitude_band.upper()
-        system = magnitude_system.upper()
-        if system == "VEGA":
-            try:
-                zero_point_jy = VEGA_ZERO_POINT_JY[band]
-            except KeyError as exc:
-                supported = ", ".join(self.available_magnitude_bands)
-                raise ValueError(
-                    f"Unsupported magnitude band '{magnitude_band}'. Supported: {supported}"
-                ) from exc
-        elif system == "AB":
-            zero_point_jy = AB_ZERO_POINT_JY
-        else:
-            supported = ", ".join(self.available_magnitude_systems)
-            raise ValueError(
-                f"Unsupported magnitude system '{magnitude_system}'. Supported: {supported}"
-            )
-
         current_flux_jy = self.get_band_flux_density_jy(spectrum, band)
-        target_flux_jy = zero_point_jy * 10 ** (-0.4 * target_magnitude)
+        target_flux_jy = AB_ZERO_POINT_JY * 10 ** (-0.4 * target_magnitude)
         scale_factor = float(target_flux_jy / current_flux_jy)
         scaled_spectrum = np.array(spectrum, copy=True)
         scaled_spectrum["flux"] *= scale_factor
@@ -495,7 +469,6 @@ class ETCCalculator:
         temp: float = -10,
         target_magnitude: float | None = None,
         magnitude_band: str | None = None,
-        magnitude_system: str = "Vega",
         throughput_toggles: Mapping[str, bool] | None = None,
         dispersion: float | None = None,
         spacial_aperture: float | None = None,
@@ -529,7 +502,6 @@ class ETCCalculator:
                 spec,
                 target_magnitude=target_magnitude,
                 magnitude_band=magnitude_band,
-                magnitude_system=magnitude_system,
             )
 
         if dispersion is None:
@@ -623,7 +595,6 @@ class ETCCalculator:
                 "spectrum_scale_factor": float(spectrum_scale_factor),
                 "target_magnitude": target_magnitude,
                 "magnitude_band": magnitude_band,
-                "magnitude_system": magnitude_system,
             },
             "throughput_plot": {
                 "wave_nm": plot_wave,

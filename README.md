@@ -24,7 +24,7 @@ Choose a two-column text spectrum containing:
 
 The packaged `SNIa_max_z0p05` spectrum from `shared-data` is offered as the initial reference location.
 
-The optional **Flux scale magnitude** field rescales the entire input spectrum so that its synthetic Johnson B- or V-band magnitude matches the requested value. Vega and AB magnitude systems are supported. Leave the field blank to preserve the input spectrum's original flux normalization.
+The optional **Flux scale magnitude** field rescales the entire input spectrum so that its synthetic Johnson B- or V-band AB magnitude matches the requested value. Leave the field blank to preserve the input spectrum's original flux normalization.
 
 ## Instrument options
 
@@ -67,6 +67,5 @@ result = calc.get_SNR_from_spectrum(
     airmass=1.3,
     target_magnitude=18.0,
     magnitude_band="V",
-    magnitude_system="Vega",
 )
 ```

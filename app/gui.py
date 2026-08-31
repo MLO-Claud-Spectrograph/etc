@@ -146,7 +146,6 @@ class ETCGui(tk.Tk):
         self.grating = tk.StringVar(value="1229")
         self.airmass = tk.StringVar(value=str(DEFAULT_AIRMASS))
         self.magnitude_band = tk.StringVar(value="V")
-        self.magnitude_system = tk.StringVar(value="Vega")
 
         self.toggle_vars = {
             name: tk.BooleanVar(value=True)
@@ -170,7 +169,7 @@ class ETCGui(tk.Tk):
 
         scale_frame = ttk.Frame(path_frame)
         scale_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
-        ttk.Label(scale_frame, text="Flux scale magnitude:").pack(side=tk.LEFT)
+        ttk.Label(scale_frame, text="Flux scale magnitude (AB):").pack(side=tk.LEFT)
         self.magnitude_entry = PlaceholderEntry(scale_frame, "optional", width=12, foreground="black")
         self.magnitude_entry.pack(side=tk.LEFT, padx=(6, 12))
         ttk.Label(scale_frame, text="Band:").pack(side=tk.LEFT)
@@ -181,8 +180,6 @@ class ETCGui(tk.Tk):
             state="readonly",
             width=5,
         ).pack(side=tk.LEFT, padx=(6, 12))
-        ttk.Label(scale_frame, text="System:").pack(side=tk.LEFT)
-        ttk.Combobox(scale_frame, textvariable=self.magnitude_system, values=self.calc.available_magnitude_systems, state="readonly", width=8).pack(side=tk.LEFT, padx=6)
 
         mode_frame = ttk.LabelFrame(root, text="Instrument options")
         mode_frame.pack(fill=tk.X, pady=6)
@@ -337,7 +334,7 @@ class ETCGui(tk.Tk):
             magnitude_value = self.magnitude_entry.value()
             target_magnitude = (
                 float(magnitude_value)
-                if magnitude_value
+                if magnitude_value and magnitude_value != self.magnitude_entry.placeholder
                 else None
             )
             grating = self.grating.get()
@@ -355,7 +352,6 @@ class ETCGui(tk.Tk):
                 "temp": float(self.entries["temp_c"].value()),
                 "target_magnitude": target_magnitude,
                 "magnitude_band": self.magnitude_band.get(),
-                "magnitude_system": self.magnitude_system.get(),
                 "throughput_toggles": {name: variable.get() for name, variable in self.toggle_vars.items()},
             }
         except ValueError as exc:
@@ -387,13 +383,12 @@ class ETCGui(tk.Tk):
         if meta["target_magnitude"] is not None:
             target_magnitude = meta["target_magnitude"]
             magnitude_band = meta["magnitude_band"]
-            magnitude_system = meta["magnitude_system"]
             spectrum_scale_factor = meta["spectrum_scale_factor"]
             self.output.insert(
                 tk.END,
                 (
                     f"Spectrum scaled to {target_magnitude:.3f} "
-                    f"{magnitude_band}-band {magnitude_system} mag "
+                    f"{magnitude_band}-band AB mag "
                     f"(scale={spectrum_scale_factor:.4g})\n"
                 ),
             )

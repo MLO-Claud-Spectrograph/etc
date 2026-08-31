@@ -35,7 +35,6 @@ def test_ab_magnitude_scaling(tmp_path):
         spectrum,
         target_magnitude=20.0,
         magnitude_band="V",
-        magnitude_system="AB",
     )
     expected_jy = AB_ZERO_POINT_JY * 10 ** (-0.4 * 20.0)
     measured_jy = calc.get_band_flux_density_jy(scaled, "V")
