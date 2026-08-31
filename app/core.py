@@ -143,19 +143,19 @@ class SNRBinResult:
 
 class ETCCalculator:
     CAMERA_CONFIGS = {
-        "QHY268": CameraConfig(
-            qe_resource="qhy268_qe",
-            nx=6280,
-            ny=4210,
-            pixel_size=3.76 * u.um,
-            read_noise=2.3 * u.electron,
-        ),
         "Kepler": CameraConfig(
             qe_resource="gsense400bsi_qe",
             nx=2048,
             ny=2048,
             pixel_size=11 * u.um,
             read_noise=1.6 * u.electron,
+        ),
+        "QHY268": CameraConfig(
+            qe_resource="qhy268_qe",
+            nx=6280,
+            ny=4210,
+            pixel_size=3.76 * u.um,
+            read_noise=2.3 * u.electron,
         ),
         "Moravian": CameraConfig(
             qe_resource="gsense4040bsi_qe",
@@ -183,7 +183,7 @@ class ETCCalculator:
 
     @property
     def available_gratings(self) -> list[int | str]:
-        return [1229, 1294, "thorlabs"]
+        return [1294, 1229, "thorlabs"]
 
     @property
     def available_camera_models(self) -> list[str]:
