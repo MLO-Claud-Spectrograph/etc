@@ -326,12 +326,11 @@ class ETCCalculator:
         return float(np.interp(temp_c, plot_temps_dc, dc_vals))
 
     @staticmethod
-    def load_spectrum(spectrum_file: Path | str, z: float) -> np.ndarray:
+    def load_spectrum(spectrum_file: Path | str) -> np.ndarray:
         spec = np.genfromtxt(spectrum_file, dtype=[("wave", float), ("flux", float)])
         if spec.ndim == 0 or spec.size < 2:
             raise ValueError("Spectrum must contain at least two wavelength/flux rows.")
         spec = np.sort(spec, order="wave")
-        spec["wave"] /= 1.0 + z
         spec["wave"] /= 10.0
         return spec
 
@@ -340,7 +339,7 @@ class ETCCalculator:
             supported = ", ".join(self.available_magnitude_bands)
             raise ValueError(f"Unsupported magnitude band '{magnitude_band}'. Supported: {supported}")
 
-        wave_angstrom = np.asarray(spectrum["wave"], dtype=float) * 10.0
+        wave_angstrom = u.Quantity(spectrum["wave"], unit=u.nm).to_value(u.AA)
         flux_lambda = np.asarray(spectrum["flux"], dtype=float)
         order = np.argsort(wave_angstrom)
         wave_angstrom = wave_angstrom[order]
@@ -434,7 +433,6 @@ class ETCCalculator:
         self,
         exp_time: float,
         spectrum_file: Path | str,
-        z: float,
         wave_centers: Iterable[float],
         binsize: float,
         sky_brightness: float = 21.6,
@@ -469,7 +467,7 @@ class ETCCalculator:
             raise ValueError("Airmass must be positive.")
 
         self._camera_config(camera_model)
-        spec = self.load_spectrum(spectrum_file, z)
+        spec = self.load_spectrum(spectrum_file)
         spectrum_scale_factor = 1.0
         if target_magnitude is not None:
             if not magnitude_band:

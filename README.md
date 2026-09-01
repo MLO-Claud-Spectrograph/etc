@@ -22,6 +22,8 @@ Choose a two-column text spectrum containing:
 1. wavelength in Angstrom
 2. flux density in erg s^-1 cm^-2 Angstrom^-1
 
+Input wavelengths, requested wave centers, and bin sizes are all interpreted in the observer frame. This calculator does not apply a redshift correction.
+
 The packaged `SNIa_max_z0p05` spectrum from `shared-data` is offered as the initial reference location.
 
 The optional **Flux scale magnitude** field rescales the entire input spectrum so that its synthetic Johnson B- or V-band AB magnitude matches the requested value. Leave the field blank to preserve the input spectrum's original flux normalization.
@@ -39,8 +41,7 @@ Detector sampling parameters are not user inputs. Dispersion and projected fiber
 ## SNR inputs
 
 - **Exposure Time** (s)
-- **Redshift**
-- **Wave Centers** (nm), comma-separated
+- **Wave Centers** (observer-frame nm), comma-separated
 - **Bin Size** (nm)
 - **Sky Brightness** (AB mag arcsec^-2; default 21.6)
 - **Fiber Length** (m; default 10)
@@ -59,7 +60,6 @@ calc = ETCCalculator()
 result = calc.get_SNR_from_spectrum(
     exp_time=1800,
     spectrum_file=get_default_spectrum_file(),
-    z=0.05,
     wave_centers=[550, 650, 750],
     binsize=5,
     camera_model="QHY268",

@@ -207,7 +207,6 @@ class ETCGui(tk.Tk):
         self.entries = {}
         specs = [
             ("exp_time", "", "s", "Exposure Time:"),
-            ("z", "", "", "Redshift:"),
             ("wave_centers_nm", "", "nm", "Wave Centers (comma-separated):"),
             ("binsize_nm", "", "nm", "Bin Size:"),
             ("sky_brightness", "21.6", "mag/arcsec^2", "Sky Brightness:"),
@@ -341,7 +340,6 @@ class ETCGui(tk.Tk):
             return {
                 "exp_time": float(self.entries["exp_time"].value()),
                 "spectrum_file": self.spectrum_path.get(),
-                "z": float(self.entries["z"].value()),
                 "wave_centers": wave_centers,
                 "binsize": float(self.entries["binsize_nm"].value()),
                 "sky_brightness": float(self.entries["sky_brightness"].value()),
@@ -414,7 +412,7 @@ class ETCGui(tk.Tk):
         try:
             params = self._read_inputs()
             calc = ETCCalculator(fiber_length_m=params["fiber_length_m"])
-            spec = calc.load_spectrum(params["spectrum_file"], params["z"])
+            spec = calc.load_spectrum(params["spectrum_file"])
             wave = spec["wave"]
             components = calc.get_throughput_components(
                 wave,

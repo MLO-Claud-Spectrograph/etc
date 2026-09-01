@@ -22,7 +22,6 @@ def test_optional_flux_scale_placeholder_is_not_parsed_as_float():
     gui = object.__new__(ETCGui)
     gui.entries = {
         "exp_time": _Entry("60"),
-        "z": _Entry("0.05"),
         "wave_centers_nm": _Entry("600, 700"),
         "binsize_nm": _Entry("5"),
         "sky_brightness": _Entry("21.6"),

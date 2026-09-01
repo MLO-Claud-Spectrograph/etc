@@ -27,10 +27,17 @@ def test_detector_sampling_is_derived_from_camera():
     assert calc.spatial_aperture_for_camera("QHY268") > 0
 
 
+def test_load_spectrum_preserves_observed_wavelengths(tmp_path):
+    spectrum_file = _write_flat_spectrum(tmp_path / "flat.txt")
+    spectrum = ETCCalculator.load_spectrum(spectrum_file)
+    assert np.isclose(spectrum["wave"][0], 350.0)
+    assert np.isclose(spectrum["wave"][-1], 950.0)
+
+
 def test_ab_magnitude_scaling(tmp_path):
     calc = ETCCalculator()
     spectrum_file = _write_flat_spectrum(tmp_path / "flat.txt")
-    spectrum = calc.load_spectrum(spectrum_file, z=0.0)
+    spectrum = calc.load_spectrum(spectrum_file)
     scaled, scale_factor = calc.scale_spectrum_to_magnitude(
         spectrum,
         target_magnitude=20.0,
@@ -63,7 +70,6 @@ def test_snr_smoke(tmp_path):
     result = calc.get_SNR_from_spectrum(
         exp_time=60.0,
         spectrum_file=spectrum_file,
-        z=0.0,
         wave_centers=[600.0],
         binsize=5.0,
         camera_model="Kepler",
