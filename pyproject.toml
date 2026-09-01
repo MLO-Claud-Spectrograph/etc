@@ -17,7 +17,7 @@ dependencies = [
     "astropy",
     "matplotlib",
     "numpy",
-    "shared-data",
+    "spectrograph-shared-data",
     "spectrograph-sim",
 ]
 
