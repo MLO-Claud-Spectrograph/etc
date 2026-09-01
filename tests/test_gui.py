@@ -34,7 +34,7 @@ def test_optional_flux_scale_placeholder_is_not_parsed_as_float():
     gui.camera_model = _Variable("QHY268")
     gui.grating = _Variable("1229")
     gui.airmass = _Variable("1.3")
-    gui.magnitude_band = _Variable("V")
+    gui.magnitude_band = _Variable("g")
     gui.toggle_vars = {}
 
     params = ETCGui._read_inputs(gui)

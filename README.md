@@ -66,6 +66,6 @@ result = calc.get_SNR_from_spectrum(
     grating_id=1294,
     airmass=1.3,
     target_magnitude=18.0,
-    magnitude_band="V",
+    magnitude_band="g",
 )
 ```

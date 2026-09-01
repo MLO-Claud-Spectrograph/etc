@@ -143,9 +143,9 @@ class ETCGui(tk.Tk):
         self.calc = ETCCalculator()
         self.spectrum_path = tk.StringVar(value="")
         self.camera_model = tk.StringVar(value=self.calc.available_camera_models[0])
-        self.grating = tk.StringVar(value="1229")
+        self.grating = tk.StringVar(value="1294")
         self.airmass = tk.StringVar(value=str(DEFAULT_AIRMASS))
-        self.magnitude_band = tk.StringVar(value="V")
+        self.magnitude_band = tk.StringVar(value="g")
 
         self.toggle_vars = {
             name: tk.BooleanVar(value=True)

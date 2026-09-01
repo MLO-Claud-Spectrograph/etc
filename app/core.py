@@ -23,100 +23,66 @@ DEFAULT_AIRMASS = 1.3
 
 # Approximate Johnson B/V photon-counting response curves. Wavelengths are Angstroms.
 PHOTOMETRIC_BANDPASSES: dict[str, np.ndarray] = {
-    "B": np.array(
+    "g": np.array(
         [
-            [3500, 0.000],
-            [3600, 0.007],
-            [3700, 0.049],
-            [3800, 0.243],
-            [3900, 0.601],
-            [4000, 0.837],
-            [4100, 0.932],
-            [4200, 0.983],
-            [4300, 1.000],
-            [4400, 0.976],
-            [4500, 0.901],
-            [4600, 0.813],
-            [4700, 0.714],
-            [4800, 0.592],
-            [4900, 0.470],
-            [5000, 0.349],
-            [5100, 0.231],
-            [5200, 0.144],
-            [5300, 0.064],
-            [5400, 0.012],
-            [5500, 0.000],
-            [5600, 0.000],
+            [3850, 0.000],
+            [3900, 0.065],
+            [3950, 0.223],
+            [4000, 0.408],
+            [4050, 0.594],
+            [4100, 0.780],
+            [4150, 0.914],
+            [4200, 0.928],
+            [5350, 0.928],
+            [5400, 0.878],
+            [5450, 0.718],
+            [5500, 0.534],
+            [5550, 0.350],
+            [5600, 0.166],
+            [5650, 0.037],
+            [5700, 0.000],
         ],
         dtype=float,
     ),
-    "V": np.array(
+    "r": np.array(
         [
-            [4700, 0.000],
-            [4800, 0.041],
-            [4900, 0.169],
-            [5000, 0.425],
-            [5100, 0.726],
-            [5200, 0.938],
-            [5300, 0.998],
-            [5400, 0.952],
-            [5500, 0.864],
-            [5600, 0.752],
-            [5700, 0.635],
-            [5800, 0.535],
-            [5900, 0.438],
-            [6000, 0.345],
-            [6100, 0.265],
-            [6200, 0.198],
-            [6300, 0.144],
-            [6400, 0.103],
-            [6500, 0.069],
-            [6600, 0.042],
-            [6700, 0.024],
-            [6800, 0.013],
-            [6900, 0.009],
-            [7000, 0.006],
-            [7100, 0.004],
+            [5350, 0.000],
+            [5400, 0.057],
+            [5450, 0.207],
+            [5500, 0.396],
+            [5550, 0.585],
+            [5600, 0.773],
+            [5650, 0.919],
+            [5700, 0.943],
+            [6750, 0.943],
+            [6800, 0.882],
+            [6850, 0.698],
+            [6900, 0.509],
+            [6950, 0.321],
+            [7000, 0.132],
+            [7050, 0.019],
+            [7100, 0.000],
         ],
         dtype=float,
     ),
-    "R_JOHN": np.array(
+    "i": np.array(
         [
-            [5900, 0.000],
-            [6000, 0.034],
-            [6100, 0.134],
-            [6200, 0.340],
-            [6300, 0.555],
-            [6400, 0.740],
-            [6500, 0.871],
-            [6600, 0.960],
-            [6700, 0.996],
-            [6800, 0.999],
-            [6900, 0.991],
-            [7000, 0.970],
-            [7100, 0.935],
-            [7200, 0.898],
-            [7300, 0.855],
-            [7400, 0.807],
-            [7500, 0.742],
-            [7600, 0.662],
-            [7700, 0.583],
-            [7800, 0.505],
-            [7900, 0.425],
-            [8000, 0.345],
-            [8100, 0.267],
-            [8200, 0.204],
-            [8300, 0.157],
-            [8400, 0.110],
-            [8500, 0.069],
-            [8600, 0.047],
-            [8700, 0.033],
-            [8800, 0.021],
-            [8900, 0.014],
-            [9000, 0.009],
-            [9100, 0.005],
-            [9200, 0.003],
-            [9300, 0.000]
+            [6750, 0.000],
+            [6800, 0.075],
+            [6850, 0.243],
+            [6900, 0.429],
+            [6950, 0.616],
+            [7000, 0.802],
+            [7050, 0.928],
+            [7100, 0.933],
+            [8000, 0.933],
+            [8050, 0.910],
+            [8100, 0.765],
+            [8150, 0.579],
+            [8200, 0.392],
+            [8250, 0.205],
+            [8300, 0.056],
+            [8350, 0.000],
         ],
         dtype=float,
     ),
@@ -398,8 +364,7 @@ class ETCCalculator:
         return spec
 
     def get_band_flux_density_jy(self, spectrum: np.ndarray, magnitude_band: str) -> float:
-        band = magnitude_band.upper()
-        if band not in PHOTOMETRIC_BANDPASSES:
+        if magnitude_band not in PHOTOMETRIC_BANDPASSES:
             supported = ", ".join(self.available_magnitude_bands)
             raise ValueError(
                 f"Unsupported magnitude band '{magnitude_band}'. Supported: {supported}"
@@ -411,7 +376,7 @@ class ETCCalculator:
         wave_angstrom = wave_angstrom[order]
         flux_lambda = flux_lambda[order]
 
-        bandpass = PHOTOMETRIC_BANDPASSES[band]
+        bandpass = PHOTOMETRIC_BANDPASSES[magnitude_band]
         supported_wave = bandpass[bandpass[:, 1] > 0, 0]
         finite_wave = wave_angstrom[np.isfinite(wave_angstrom)]
         if (
@@ -419,7 +384,7 @@ class ETCCalculator:
             or finite_wave.min() > supported_wave.min()
             or finite_wave.max() < supported_wave.max()
         ):
-            raise ValueError(f"Spectrum does not fully cover the Johnson {band} band.")
+            raise ValueError(f"Spectrum does not fully cover the LSST {magnitude_band} band.")
 
         response = np.interp(
             wave_angstrom,
@@ -435,7 +400,7 @@ class ETCCalculator:
             & (response > 0)
         )
         if np.count_nonzero(valid) < 2:
-            raise ValueError(f"Spectrum does not adequately sample the Johnson {band} band.")
+            raise ValueError(f"Spectrum does not adequately sample the LSST {magnitude_band} band.")
 
         wave_valid = wave_angstrom[valid]
         response_valid = response[valid]
@@ -446,14 +411,14 @@ class ETCCalculator:
             x=wave_valid,
         )
         if denominator <= 0:
-            raise ValueError(f"Could not integrate the Johnson {band} bandpass.")
+            raise ValueError(f"Could not integrate the LSST {magnitude_band} bandpass.")
 
         light_speed = const.c.to_value(u.AA / u.s)
         flux_nu_cgs = numerator / (light_speed * denominator)
         flux_nu_jy = float(flux_nu_cgs / 1e-23)
         if not np.isfinite(flux_nu_jy) or flux_nu_jy <= 0:
             raise ValueError(
-                f"Spectrum has non-positive synthetic flux in the Johnson {band} band."
+                f"Spectrum has non-positive synthetic flux in the LSST {magnitude_band} band."
             )
         return flux_nu_jy
 
@@ -463,8 +428,7 @@ class ETCCalculator:
         target_magnitude: float,
         magnitude_band: str,
     ) -> tuple[np.ndarray, float]:
-        band = magnitude_band.upper()
-        current_flux_jy = self.get_band_flux_density_jy(spectrum, band)
+        current_flux_jy = self.get_band_flux_density_jy(spectrum, magnitude_band)
         target_flux_jy = AB_ZERO_POINT_JY * 10 ** (-0.4 * target_magnitude)
         scale_factor = float(target_flux_jy / current_flux_jy)
         scaled_spectrum = np.array(spectrum, copy=True)

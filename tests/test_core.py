@@ -34,10 +34,10 @@ def test_ab_magnitude_scaling(tmp_path):
     scaled, scale_factor = calc.scale_spectrum_to_magnitude(
         spectrum,
         target_magnitude=20.0,
-        magnitude_band="V",
+        magnitude_band="r",
     )
     expected_jy = AB_ZERO_POINT_JY * 10 ** (-0.4 * 20.0)
-    measured_jy = calc.get_band_flux_density_jy(scaled, "V")
+    measured_jy = calc.get_band_flux_density_jy(scaled, "r")
     assert np.isclose(measured_jy, expected_jy, rtol=2e-3)
     assert scale_factor > 0
 
