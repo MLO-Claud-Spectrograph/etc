@@ -115,22 +115,22 @@ class ETCCalculator:
             qe_resource="gsense400bsi_qe",
             nx=2048,
             ny=2048,
-            pixel_size=11 * u.um,
-            read_noise=1.6 * u.electron,
+            pixel_size=11*u.um,
+            read_noise=1.6*u.electron,
         ),
         "QHY268": CameraConfig(
             qe_resource="qhy268_qe",
             nx=6280,
             ny=4210,
-            pixel_size=3.76 * u.um,
-            read_noise=2.3 * u.electron,
+            pixel_size=3.76*u.um,
+            read_noise=2.3*u.electron,
         ),
         "Moravian": CameraConfig(
             qe_resource="gsense4040bsi_qe",
             nx=4096,
             ny=4096,
-            pixel_size=9 * u.um,
-            read_noise=3.9 * u.electron,
+            pixel_size=9*u.um,
+            read_noise=3.9*u.electron,
         ),
     }
 
@@ -166,9 +166,7 @@ class ETCCalculator:
             return self.CAMERA_CONFIGS[camera_model]
         except KeyError as exc:
             supported = ", ".join(self.available_camera_models)
-            raise ValueError(
-                f"Unsupported camera model '{camera_model}'. Supported: {supported}"
-            ) from exc
+            raise ValueError(f"Unsupported camera model '{camera_model}'. Supported: {supported}") from exc
 
     def detector_model(self, camera_model: str) -> DetectorModel:
         camera = self._camera_config(camera_model)
@@ -182,12 +180,12 @@ class ETCCalculator:
     def spectrograph_model(self, camera_model: str) -> SpectrographModel:
         return SpectrographModel(
             detector=self.detector_model(camera_model),
-            groove_density=300 / u.mm,
-            incidence_angle=32 * u.deg,
-            diffraction_angle=-20 * u.deg,
-            collimator_focal_length=180 * u.mm,
-            camera_focal_length=100 * u.mm,
-            fiber_core_diameter=105 * u.um,
+            groove_density=300/u.mm,
+            incidence_angle=32*u.deg,
+            diffraction_angle=-20*u.deg,
+            collimator_focal_length=180*u.mm,
+            camera_focal_length=100*u.mm,
+            fiber_core_diameter=105*u.um,
             diffraction_order=1,
         )
 
@@ -195,9 +193,7 @@ class ETCCalculator:
         return self._camera_config(camera_model).read_noise.to_value(u.electron)
 
     def dispersion_for_camera(self, camera_model: str) -> float:
-        return abs(
-            self.spectrograph_model(camera_model).dispersion.to_value(u.nm / u.pixel)
-        )
+        return abs(self.spectrograph_model(camera_model).dispersion.to_value(u.nm / u.pixel))
 
     def spatial_aperture_for_camera(self, camera_model: str) -> float:
         return self.spectrograph_model(camera_model).spatial_fwhm_px.to_value(u.pixel)
@@ -228,30 +224,16 @@ class ETCCalculator:
         length = self.fiber_length if fiber_length_m is None else float(fiber_length_m) * u.m
         if length < 0 * u.m:
             raise ValueError("Fiber length cannot be negative.")
-        transmission = 10 ** (
-            -attenuation_db_per_km * length.to_value(u.km) / 10
-        )
-        return ThroughputCurve(
-            wavelength_nm * u.nm,
-            transmission,
-            name="fiber",
-        )
+        transmission = 10 ** (-attenuation_db_per_km * length.to_value(u.km) / 10)
+        return ThroughputCurve(wavelength_nm * u.nm, transmission, name="fiber")
 
     def _grating_curve(self, grating_id: int | str) -> ThroughputCurve:
         if grating_id == 1294:
-            return ThroughputCurve.from_csv(
-                CSV_FILES["master 1294 unpolarized"],
-                name="grating",
-            )
+            return ThroughputCurve.from_csv(CSV_FILES["master 1294 unpolarized"], name="grating")
         if grating_id == "thorlabs":
-            return ThroughputCurve.from_csv(
-                CSV_FILES["gr50a-0305_efficiency-780"],
-                name="grating",
-            )
+            return ThroughputCurve.from_csv(CSV_FILES["gr50a-0305_efficiency-780"], name="grating")
         if grating_id != 1229:
-            raise ValueError(
-                f"Unsupported grating '{grating_id}'. Supported: 1229, 1294, 'thorlabs'"
-            )
+            raise ValueError(f"Unsupported grating '{grating_id}'. Supported: 1229, 1294, 'thorlabs'")
 
         p_wave, p_efficiency = self._read_curve("master 1229 P plane")
         s_wave, s_efficiency = self._read_curve("master 1229 S plane")
@@ -281,24 +263,11 @@ class ETCCalculator:
         return {
             "atmosphere": AtmosphericExtinction(airmass=float(airmass)),
             "fiber": self._fiber_curve(fiber_length_m),
-            "misc": ThroughputCurve(
-                np.array([3000.0, 10500.0]) * u.AA,
-                np.array([0.95, 0.95]),
-                name="misc",
-            ),
-            "collimator": ThroughputCurve.from_csv(
-                CSV_FILES["thorlabs_ar_coating"],
-                name="collimator",
-            ),
+            "misc": ThroughputCurve(np.array([3000.0, 10500.0])*u.AA, np.array([0.95, 0.95]), name="misc"),
+            "collimator": ThroughputCurve.from_csv(CSV_FILES["thorlabs_ar_coating"], name="collimator"),
             "grating": self._grating_curve(grating_id),
-            "window": ThroughputCurve.from_csv(
-                CSV_FILES["UVFS_coating"],
-                name="window",
-            ),
-            "detector": ThroughputCurve.from_csv(
-                CSV_FILES[camera.qe_resource],
-                name="detector",
-            ),
+            "window": ThroughputCurve.from_csv(CSV_FILES["UVFS_coating"], name="window"),
+            "detector": ThroughputCurve.from_csv(CSV_FILES[camera.qe_resource], name="detector"),
         }
 
     def get_throughput_components(
@@ -322,11 +291,7 @@ class ETCCalculator:
             toggles.update(throughput_toggles)
 
         values = {name: curve(wavelength) for name, curve in curves.items()}
-        active_curves = [
-            curve
-            for name, curve in curves.items()
-            if toggles.get(name, True)
-        ]
+        active_curves = [curve for name, curve in curves.items() if toggles.get(name, True)]
         simulator = InstrumentSimulator(
             spectrograph=self.spectrograph_model(camera_model),
             throughputs=active_curves,
@@ -366,9 +331,7 @@ class ETCCalculator:
     def get_band_flux_density_jy(self, spectrum: np.ndarray, magnitude_band: str) -> float:
         if magnitude_band not in PHOTOMETRIC_BANDPASSES:
             supported = ", ".join(self.available_magnitude_bands)
-            raise ValueError(
-                f"Unsupported magnitude band '{magnitude_band}'. Supported: {supported}"
-            )
+            raise ValueError(f"Unsupported magnitude band '{magnitude_band}'. Supported: {supported}")
 
         wave_angstrom = np.asarray(spectrum["wave"], dtype=float) * 10.0
         flux_lambda = np.asarray(spectrum["flux"], dtype=float)
