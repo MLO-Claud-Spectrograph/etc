@@ -118,6 +118,13 @@ class ETCCalculator:
             pixel_size=11*u.um,
             read_noise=1.6*u.electron,
         ),
+        "Moravian": CameraConfig(
+            qe_resource="gsense4040bsi_qe",
+            nx=4096,
+            ny=4096,
+            pixel_size=9*u.um,
+            read_noise=3.9*u.electron,
+        ),
         "QHY268": CameraConfig(
             qe_resource="qhy268_qe",
             nx=6280,
@@ -125,12 +132,12 @@ class ETCCalculator:
             pixel_size=3.76*u.um,
             read_noise=2.3*u.electron,
         ),
-        "Moravian": CameraConfig(
-            qe_resource="gsense4040bsi_qe",
-            nx=4096,
-            ny=4096,
-            pixel_size=9*u.um,
-            read_noise=3.9*u.electron,
+        "STF8300": CameraConfig(
+            qe_resource="kaf8300c_qe",
+            nx=3352,
+            ny=2532,
+            pixel_size=5.4*u.um,
+            read_noise=9.3*u.electron,
         ),
     }
 
