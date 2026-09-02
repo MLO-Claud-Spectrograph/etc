@@ -98,6 +98,7 @@ class CameraConfig:
     ny: int
     pixel_size: u.Quantity
     read_noise: u.Quantity
+    dark_current_minus20: u.Quantity
 
 
 @dataclass
@@ -117,6 +118,7 @@ class ETCCalculator:
             ny=2048,
             pixel_size=11*u.um,
             read_noise=1.6*u.electron,
+            dark_current_minus20=0.4*u.electron/u.s,
         ),
         "Moravian": CameraConfig(
             qe_resource="gsense4040bsi_qe",
@@ -124,6 +126,7 @@ class ETCCalculator:
             ny=4096,
             pixel_size=9*u.um,
             read_noise=3.9*u.electron,
+            dark_current_minus20=0.1*u.electron/u.s, # NOTE: this is a fake value because I can't find a real one
         ),
         "QHY268": CameraConfig(
             qe_resource="qhy268_qe",
@@ -131,6 +134,7 @@ class ETCCalculator:
             ny=4210,
             pixel_size=3.76*u.um,
             read_noise=2.3*u.electron,
+            dark_current_minus20=0.0005*u.electron/u.s,
         ),
         "STF8300": CameraConfig(
             qe_resource="kaf8300c_qe",
@@ -138,6 +142,7 @@ class ETCCalculator:
             ny=2532,
             pixel_size=5.4*u.um,
             read_noise=9.3*u.electron,
+            dark_current_minus20=0.01*u.electron/u.s
         ),
     }
 
@@ -168,11 +173,12 @@ class ETCCalculator:
     def available_magnitude_bands(self) -> list[str]:
         return list(PHOTOMETRIC_BANDPASSES)
 
-    def _camera_config(self, camera_model: str) -> CameraConfig:
+    @classmethod
+    def _camera_config(cls, camera_model: str) -> CameraConfig:
         try:
-            return self.CAMERA_CONFIGS[camera_model]
+            return cls.CAMERA_CONFIGS[camera_model]
         except KeyError as exc:
-            supported = ", ".join(self.available_camera_models)
+            supported = ", ".join(cls.available_camera_models)
             raise ValueError(f"Unsupported camera model '{camera_model}'. Supported: {supported}") from exc
 
     def detector_model(self, camera_model: str) -> DetectorModel:
@@ -307,24 +313,9 @@ class ETCCalculator:
         values["total"] = simulator.combined_throughput(wavelength)
         return values
 
-    @staticmethod
-    def get_dark_current(temp_c: float) -> float:
-        plot_temps_dc = np.array([-20, -15, -10, -5, 0, 5, 10, 15, 20], dtype=float)
-        dc_vals = np.array(
-            [
-                0.00053145,
-                0.00062832,
-                0.001309,
-                0.0018326,
-                0.0036652,
-                0.0059756,
-                0.010472,
-                0.019111,
-                0.036913,
-            ],
-            dtype=float,
-        )
-        return float(np.interp(temp_c, plot_temps_dc, dc_vals))
+    @classmethod
+    def get_dark_current(cls, camera_model: str) -> u.Quantity:
+        return cls._camera_config(camera_model).dark_current_minus20
 
     @staticmethod
     def load_spectrum(spectrum_file: Path | str) -> np.ndarray:
@@ -437,11 +428,11 @@ class ETCCalculator:
         wave_centers: Iterable[float],
         binsize: float,
         sky_brightness: float = 21.6,
-        camera_model: str = "QHY268",
-        grating_id: int | str = 1229,
+        camera_model: str = "Kepler",
+        grating_id: int | str = 1294,
         airmass: float = DEFAULT_AIRMASS,
         fiber_length_m: float | None = None,
-        temp: float = -10,
+        temp: float = -20,
         target_magnitude: float | None = None,
         magnitude_band: str | None = None,
         throughput_toggles: Mapping[str, bool] | None = None,
@@ -491,7 +482,7 @@ class ETCCalculator:
         n_wave = binsize / dispersion
         n_total = n_wave * spacial_aperture
         read_noise_var = read_noise_e**2 * n_total
-        dark_current = self.get_dark_current(temp)
+        dark_current = self.get_dark_current(camera_model).to_value(u.electron/u.s)
         dark_counts = dark_current * n_total * exp_time
         fiber_sky_area = self.fiber_sky_area_arcsec2
 
