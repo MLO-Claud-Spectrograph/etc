@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 from astropy import units as u
 
 from etc.core import AB_ZERO_POINT_JY, ETCCalculator
@@ -34,11 +35,49 @@ def test_detector_sampling_is_derived_from_camera():
     assert 0 < calc.extraction_fraction_for_camera("QHY268") <= 1
 
 
+def test_spectral_pixel_count_uses_spectrograph_mapping():
+    calc = ETCCalculator()
+    spectrograph = calc.spectrograph_model("QHY268")
+    edges_nm = np.array([797.5, 802.5])
+    expected = abs(
+        np.diff(
+            spectrograph.wavelength_to_x(edges_nm * u.nm).to_value(u.pixel)
+        )[0]
+    )
+    measured = calc.spectral_pixel_count_for_bin(
+        "QHY268",
+        edges_nm[0],
+        edges_nm[1],
+    )
+    linear_approximation = np.diff(edges_nm)[0] / calc.dispersion_for_camera("QHY268")
+    assert np.isclose(measured, expected)
+    assert not np.isclose(measured, linear_approximation, rtol=1e-3)
+
+
+def test_invalid_camera_lists_supported_models():
+    calc = ETCCalculator()
+    with pytest.raises(ValueError, match="Unsupported camera model.*Kepler.*QHY268"):
+        calc.detector_model("not-a-camera")
+
+
 def test_load_spectrum_preserves_observed_wavelengths(tmp_path):
     spectrum_file = _write_flat_spectrum(tmp_path / "flat.txt")
     spectrum = ETCCalculator.load_spectrum(spectrum_file)
     assert np.isclose(spectrum["wave"][0], 350.0)
     assert np.isclose(spectrum["wave"][-1], 950.0)
+
+
+def test_bin_samples_include_exact_interpolated_boundaries():
+    wavelength = np.array([590.0, 598.0, 602.0, 610.0])
+    flux = 2 * wavelength
+    bin_wavelength, bin_flux = ETCCalculator._samples_with_bin_boundaries(
+        wavelength,
+        flux,
+        596.0,
+        606.0,
+    )
+    assert np.allclose(bin_wavelength, [596.0, 598.0, 602.0, 606.0])
+    assert np.allclose(bin_flux, 2 * bin_wavelength)
 
 
 def test_ab_magnitude_scaling(tmp_path):
@@ -101,6 +140,13 @@ def test_snr_smoke(tmp_path):
     assert result["meta"]["dispersion_nm_per_pix"] > 0
     assert result["meta"]["fiber_sky_area_arcsec2"] > 0
     assert result["meta"]["detector_temperature_c"] == -20.0
+    assert np.isclose(
+        row.n_wave_pixels,
+        calc.spectral_pixel_count_for_bin("Kepler", 597.5, 602.5),
+    )
+    assert row.n_total_pixels > row.n_wave_pixels
+    assert row.read_noise_var > 0
+    assert row.dark_counts > 0
 
 
 def test_fiber_coupling_airmass_and_sky_background_affect_expected_terms(tmp_path):

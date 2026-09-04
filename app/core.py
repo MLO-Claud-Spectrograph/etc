@@ -118,6 +118,10 @@ class SNRBinResult:
     wave_center_nm: float
     source_counts: float
     sky_counts: float
+    n_wave_pixels: float
+    n_total_pixels: float
+    read_noise_var: float
+    dark_counts: float
     snr: float
     component_averages: dict[str, float]
 
@@ -194,7 +198,7 @@ class ETCCalculator:
         try:
             return cls.CAMERA_CONFIGS[camera_model]
         except KeyError as exc:
-            supported = ", ".join(cls.available_camera_models)
+            supported = ", ".join(cls.CAMERA_CONFIGS)
             raise ValueError(f"Unsupported camera model '{camera_model}'. Supported: {supported}") from exc
 
     def detector_model(self, camera_model: str) -> DetectorModel:
@@ -225,6 +229,20 @@ class ETCCalculator:
 
     def dispersion_for_camera(self, camera_model: str) -> float:
         return abs(self.spectrograph_model(camera_model).dispersion.to_value(u.nm / u.pixel))
+
+    def spectral_pixel_count_for_bin(
+        self,
+        camera_model: str,
+        wave_min_nm: float,
+        wave_max_nm: float,
+    ) -> float:
+        """Return the detector width of a wavelength bin in pixels."""
+        if wave_max_nm <= wave_min_nm:
+            raise ValueError("Wavelength-bin maximum must exceed its minimum.")
+        x_edges = self.spectrograph_model(camera_model).wavelength_to_x(
+            np.array([wave_min_nm, wave_max_nm]) * u.nm
+        )
+        return float(abs(np.diff(x_edges.to_value(u.pixel))[0]))
 
     def extraction_aperture_for_camera(self, camera_model: str) -> float:
         """Return the full trace-to-trace spacing in detector pixels."""
@@ -348,6 +366,32 @@ class ETCCalculator:
         spec = np.sort(spec, order="wave")
         spec["wave"] /= 10.0
         return spec
+
+    @staticmethod
+    def _samples_with_bin_boundaries(
+        wavelength_nm: np.ndarray,
+        flux_density: np.ndarray,
+        wave_min_nm: float,
+        wave_max_nm: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Select a bin and interpolate samples at both exact boundaries."""
+        wavelength_nm = np.asarray(wavelength_nm, dtype=float)
+        flux_density = np.asarray(flux_density, dtype=float)
+        if wave_min_nm < wavelength_nm[0] or wave_max_nm > wavelength_nm[-1]:
+            raise ValueError("Spectrum does not cover the complete wavelength bin.")
+
+        inside = (wavelength_nm > wave_min_nm) & (wavelength_nm < wave_max_nm)
+        bin_wavelength = np.concatenate(
+            ([wave_min_nm], wavelength_nm[inside], [wave_max_nm])
+        )
+        bin_flux = np.concatenate(
+            (
+                [np.interp(wave_min_nm, wavelength_nm, flux_density)],
+                flux_density[inside],
+                [np.interp(wave_max_nm, wavelength_nm, flux_density)],
+            )
+        )
+        return bin_wavelength, bin_flux
 
     def get_band_flux_density_jy(self, spectrum: np.ndarray, magnitude_band: str) -> float:
         if magnitude_band not in PHOTOMETRIC_BANDPASSES:
@@ -503,7 +547,8 @@ class ETCCalculator:
                 magnitude_band=magnitude_band,
             )
 
-        if dispersion is None:
+        use_spectrograph_mapping = dispersion is None
+        if use_spectrograph_mapping:
             dispersion = self.dispersion_for_camera(camera_model)
         if extraction_aperture is None:
             extraction_aperture = self.extraction_aperture_for_camera(camera_model)
@@ -512,11 +557,7 @@ class ETCCalculator:
         if dispersion <= 0 or extraction_aperture <= 0 or read_noise_e < 0:
             raise ValueError("Detector extraction parameters must be non-negative and non-zero.")
 
-        n_wave = binsize / dispersion
-        n_total = n_wave * extraction_aperture
-        read_noise_var = read_noise_e**2 * n_total
         dark_current = self.get_dark_current(camera_model).to_value(u.electron/u.s)
-        dark_counts = dark_current * n_total * exp_time
         extraction_fraction = self.extraction_fraction_for_camera(camera_model)
         sky_wavelength, sky_surface_brightness = self.sky_spectrum(sky_background)
         sky_wave_nm = sky_wavelength.to_value(u.nm)
@@ -533,10 +574,29 @@ class ETCCalculator:
         for center in wave_centers:
             wave_min = center - binsize / 2
             wave_max = center + binsize / 2
-            in_bin = (spec["wave"] >= wave_min) & (spec["wave"] <= wave_max)
-            wave_bin_nm = np.asarray(spec["wave"][in_bin], dtype=float)
-            if wave_bin_nm.size < 2:
-                raise ValueError(f"No sufficient spectral samples in bin around {center} nm.")
+            try:
+                wave_bin_nm, source_flux_values = self._samples_with_bin_boundaries(
+                    spec["wave"],
+                    spec["flux"],
+                    wave_min,
+                    wave_max,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Spectrum does not fully cover the bin around {center} nm."
+                ) from exc
+
+            if use_spectrograph_mapping:
+                n_wave = self.spectral_pixel_count_for_bin(
+                    camera_model,
+                    wave_min,
+                    wave_max,
+                )
+            else:
+                n_wave = binsize / dispersion
+            n_total = n_wave * extraction_aperture
+            read_noise_var = read_noise_e**2 * n_total
+            dark_counts = dark_current * n_total * exp_time
 
             components = self.get_throughput_components(
                 wave_bin_nm,
@@ -548,19 +608,27 @@ class ETCCalculator:
             )
 
             wavelength = wave_bin_nm * u.nm
-            source_flux = np.asarray(spec["flux"][in_bin], dtype=float) * FLUX_DENSITY_UNIT
+            source_flux = source_flux_values * FLUX_DENSITY_UNIT
             source_rate = self._integrated_electron_rate(
                 wavelength,
                 source_flux,
                 components["total"],
             )
 
-            sky_in_bin = (sky_wave_nm >= wave_min) & (sky_wave_nm <= wave_max)
-            if np.count_nonzero(sky_in_bin) < 2:
-                raise ValueError(f"No sufficient sky-spectrum samples in bin around {center} nm.")
-            sky_wave_bin = sky_wavelength[sky_in_bin]
+            try:
+                sky_wave_bin_nm, sky_flux_values = self._samples_with_bin_boundaries(
+                    sky_wave_nm,
+                    sky_flux_density.to_value(sky_flux_density.unit),
+                    wave_min,
+                    wave_max,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Sky spectrum does not fully cover the bin around {center} nm."
+                ) from exc
+            sky_wave_bin = sky_wave_bin_nm * u.nm
             sky_components = self.get_throughput_components(
-                sky_wave_bin.to_value(u.nm),
+                sky_wave_bin_nm,
                 camera_model=camera_model,
                 grating_id=grating_id,
                 airmass=airmass,
@@ -569,7 +637,7 @@ class ETCCalculator:
             )
             sky_rate = self._integrated_electron_rate(
                 sky_wave_bin,
-                sky_flux_density[sky_in_bin],
+                sky_flux_values * sky_flux_density.unit,
                 sky_components["total"],
             )
 
@@ -583,6 +651,10 @@ class ETCCalculator:
                     wave_center_nm=float(center),
                     source_counts=float(source_counts),
                     sky_counts=float(sky_counts),
+                    n_wave_pixels=float(n_wave),
+                    n_total_pixels=float(n_total),
+                    read_noise_var=float(read_noise_var),
+                    dark_counts=float(dark_counts),
                     snr=float(snr_bin),
                     component_averages={
                         name: float(np.mean(values))
@@ -599,13 +671,9 @@ class ETCCalculator:
             "bins": results,
             "meta": {
                 "exp_time": float(exp_time),
-                "n_total_pixels": float(n_total),
-                "n_wave_pixels": float(n_wave),
                 "extraction_aperture_pix": float(extraction_aperture),
                 "extraction_fraction": float(extraction_fraction),
                 "dispersion_nm_per_pix": float(dispersion),
-                "read_noise_var": float(read_noise_var),
-                "dark_counts": float(dark_counts),
                 "dark_current": float(dark_current),
                 "detector_temperature_c": DETECTOR_TEMPERATURE_C,
                 "fiber_sky_area_arcsec2": self.fiber_sky_area.to_value(u.arcsec**2),
