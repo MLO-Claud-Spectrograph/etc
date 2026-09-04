@@ -16,7 +16,7 @@ requires-python = ">=3.10"
 dependencies = [
     "astropy",
     "matplotlib",
-    "numpy",
+    "numpy>=2",
     "spectrograph-shared-data",
     "spectrograph-sim",
 ]
