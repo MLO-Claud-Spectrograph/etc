@@ -154,7 +154,7 @@ class ETCCalculator:
             ny=2532,
             pixel_size=5.4*u.um,
             read_noise=9.3*u.electron,
-            dark_current_minus20=0.01*u.electron/u.s
+            dark_current_minus20=0.001*u.electron/u.s
         ),
     }
 
