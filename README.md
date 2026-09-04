@@ -43,6 +43,7 @@ Detector sampling parameters are not user inputs. Dispersion and fiber pitch are
 - **Exposure Time** (s)
 - **Wave Centers** (observer-frame nm), comma-separated
 - **Bin Size** (nm)
+- **Sky Background** (`dark`, `grey`, or `bright`; default `dark`)
 - **Fiber Length** (m; default 10)
 - **Fiber Coupling Efficiency** (fraction; default 1.0)
 
@@ -52,7 +53,7 @@ The detector is assumed to operate at -20&deg;C. Each camera's fixed -20&deg;C d
 
 ## Sky and extraction model
 
-The background uses the line-resolved DESI benchmark sky spectrum distributed with [desimodel](https://github.com/desihub/desimodel). It spans 3500-10000 &#8491; in increments of 0.1 &#8491;, so narrow airglow features are integrated on the sky spectrum's own grid rather than on the potentially sparse source spectrum wavelength grid.
+The selectable dark, grey, and bright backgrounds use the corresponding line-resolved DESI benchmark sky spectra distributed with [desimodel](https://github.com/desihub/desimodel). They span 3500-10000 &#8491; in increments of 0.1 &#8491;, so narrow airglow features are integrated on the sky spectrum's own grid rather than on the potentially sparse source spectrum wavelength grid. The default is the "dark" spectrum, which equates to a sky brightness of approximately 20.6 msas in the $r$-band.
 
 Sky background is integrated over the fiber's circular on-sky aperture. Source and sky counts are then multiplied by the same Gaussian-profile extraction fraction for the single fiber pitch extraction box. Fiber coupling is applied only to the source&mdash;sky flux enters the fiber no matter what. Dark-current and read-noise variance use the same extraction-box pixel count.
 
@@ -75,6 +76,7 @@ result = calc.get_SNR_from_spectrum(
     spectrum_file=get_default_spectrum_file(),
     wave_centers=[550, 650, 750],
     binsize=5,
+    sky_background="grey",
     camera_model="QHY268",
     grating_id=1294,
     airmass=1.3,

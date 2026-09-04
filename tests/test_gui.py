@@ -25,7 +25,7 @@ def test_optional_flux_scale_placeholder_is_not_parsed_as_float():
         "wave_centers_nm": _Entry("600, 700"),
         "binsize_nm": _Entry("5"),
         "fiber_length_m": _Entry("10"),
-        "fiber_coupling_efficiency": _Entry("80"),
+        "fiber_coupling_efficiency": _Entry("0.8"),
     }
     gui.magnitude_entry = _Entry("optional", placeholder="optional")
     gui.spectrum_path = _Variable("spectrum.txt")
@@ -33,9 +33,11 @@ def test_optional_flux_scale_placeholder_is_not_parsed_as_float():
     gui.grating = _Variable("1229")
     gui.airmass = _Variable("1.3")
     gui.magnitude_band = _Variable("g")
+    gui.sky_background = _Variable("grey")
     gui.toggle_vars = {}
 
     params = ETCGui._read_inputs(gui)
 
     assert params["target_magnitude"] is None
-    assert params["fiber_coupling_efficiency"] == 80.0
+    assert params["fiber_coupling_efficiency"] == 0.8
+    assert params["sky_background"] == "grey"

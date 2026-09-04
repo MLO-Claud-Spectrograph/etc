@@ -71,14 +71,16 @@ def test_total_throughput_uses_simulator_combination():
     assert np.allclose(components["total"], expected)
 
 
-def test_line_resolved_sky_spectrum_is_available():
+def test_line_resolved_sky_spectra_are_available():
     calc = ETCCalculator()
-    wavelength, flux_density = calc.sky_spectrum
-    assert wavelength.size == flux_density.size
-    assert wavelength.size > 10_000
-    assert wavelength.min() < 400 * u.nm
-    assert wavelength.max() > 900 * u.nm
-    assert np.nanmax(flux_density.value) > 10 * np.nanmedian(flux_density.value)
+    assert calc.available_sky_backgrounds == ["dark", "grey", "bright"]
+    for sky_background in calc.available_sky_backgrounds:
+        wavelength, flux_density = calc.sky_spectrum(sky_background)
+        assert wavelength.size == flux_density.size
+        assert wavelength.size > 10_000
+        assert wavelength.min() < 400 * u.nm
+        assert wavelength.max() > 900 * u.nm
+        assert np.nanmax(flux_density.value) > 10 * np.nanmedian(flux_density.value)
 
 
 def test_snr_smoke(tmp_path):
@@ -101,7 +103,7 @@ def test_snr_smoke(tmp_path):
     assert result["meta"]["detector_temperature_c"] == -20.0
 
 
-def test_fiber_coupling_and_airmass_only_change_source(tmp_path):
+def test_fiber_coupling_airmass_and_sky_background_affect_expected_terms(tmp_path):
     calc = ETCCalculator()
     spectrum_file = _write_flat_spectrum(tmp_path / "flat.txt", f_nu_jy=1e-4)
     common = {
@@ -113,16 +115,23 @@ def test_fiber_coupling_and_airmass_only_change_source(tmp_path):
         "grating_id": 1294,
         "airmass": 1.3,
     }
-    full = calc.get_SNR_from_spectrum(**common, fiber_coupling_efficiency=100.0)
-    half = calc.get_SNR_from_spectrum(**common, fiber_coupling_efficiency=50.0)
+    full = calc.get_SNR_from_spectrum(**common, fiber_coupling_efficiency=1.0)
+    half = calc.get_SNR_from_spectrum(**common, fiber_coupling_efficiency=0.5)
     high_airmass = calc.get_SNR_from_spectrum(
         **(common | {"airmass": 2.0}),
-        fiber_coupling_efficiency=100.0,
+        fiber_coupling_efficiency=1.0,
     )
+    grey = calc.get_SNR_from_spectrum(**common, sky_background="grey")
+    bright = calc.get_SNR_from_spectrum(**common, sky_background="bright")
     full_bin = full["bins"][0]
     half_bin = half["bins"][0]
     high_airmass_bin = high_airmass["bins"][0]
+    grey_bin = grey["bins"][0]
+    bright_bin = bright["bins"][0]
     assert np.isclose(half_bin.source_counts, 0.5 * full_bin.source_counts)
     assert np.isclose(half_bin.sky_counts, full_bin.sky_counts)
     assert high_airmass_bin.source_counts < full_bin.source_counts
     assert np.isclose(high_airmass_bin.sky_counts, full_bin.sky_counts)
+    assert np.isclose(grey_bin.source_counts, full_bin.source_counts)
+    assert np.isclose(bright_bin.source_counts, full_bin.source_counts)
+    assert full_bin.sky_counts < grey_bin.sky_counts < bright_bin.sky_counts

@@ -13,6 +13,7 @@ from matplotlib import pyplot as plt
 from .core import (
     DEFAULT_AIRMASS,
     DEFAULT_FIBER_COUPLING_EFFICIENCY,
+    DEFAULT_SKY_BACKGROUND,
     ETCCalculator,
     get_default_spectrum_file,
 )
@@ -151,6 +152,7 @@ class ETCGui(tk.Tk):
         self.grating = tk.StringVar(value="1294")
         self.airmass = tk.StringVar(value=str(DEFAULT_AIRMASS))
         self.magnitude_band = tk.StringVar(value="g")
+        self.sky_background = tk.StringVar(value=DEFAULT_SKY_BACKGROUND)
 
         self.toggle_vars = {
             name: tk.BooleanVar(value=True)
@@ -219,7 +221,7 @@ class ETCGui(tk.Tk):
         ]
 
         for index, (key, placeholder, unit, display) in enumerate(specs):
-            row, column = divmod(index, 4)
+            row, column = divmod(index, 3)
             ttk.Label(fields_frame, text=display).grid(row=row * 2, column=column, padx=6, pady=(6, 0), sticky=tk.W)
             holder = ttk.Frame(fields_frame)
             holder.grid(row=row * 2 + 1, column=column, padx=6, pady=(0, 6), sticky=tk.W)
@@ -228,6 +230,9 @@ class ETCGui(tk.Tk):
             if unit:
                 ttk.Label(holder, text=unit).pack(side=tk.LEFT, padx=(6, 0))
             self.entries[key] = entry
+
+        ttk.Label(fields_frame, text="Sky Background:").grid(row=2, column=2, padx=6, pady=(6, 0), sticky=tk.W)
+        ttk.Combobox(fields_frame, textvariable=self.sky_background, values=self.calc.available_sky_backgrounds, state="readonly", width=16).grid(row=3, column=2, padx=6, pady=(0, 6), sticky=tk.W)
 
         btn_frame = ttk.Frame(root)
         btn_frame.pack(fill=tk.X, pady=10)
@@ -346,6 +351,7 @@ class ETCGui(tk.Tk):
                 "spectrum_file": self.spectrum_path.get(),
                 "wave_centers": wave_centers,
                 "binsize": float(self.entries["binsize_nm"].value()),
+                "sky_background": self.sky_background.get(),
                 "camera_model": self.camera_model.get(),
                 "grating_id": int(grating) if grating.isdigit() else grating,
                 "airmass": float(self.airmass.get()),
@@ -382,7 +388,7 @@ class ETCGui(tk.Tk):
         self.output.insert(tk.END, f"Dispersion: {dispersion:.4f} nm/pix\n")
         self.output.insert(tk.END, f"Extraction aperture: {extraction_aperture:.2f} pix ({extraction_fraction:.2%} of fiber profile)\n")
         self.output.insert(tk.END, f"Fiber coupling efficiency: {meta['fiber_coupling_efficiency']:.1f}\n")
-        self.output.insert(tk.END, f"Sky spectrum: {meta['sky_spectrum']}\n")
+        self.output.insert(tk.END, f"Sky background: {meta['sky_background']}\n")
         # self.output.insert(tk.END, f"Detector temperature: {meta['detector_temperature_c']:.0f} C\n")
         self.output.insert(tk.END, f"Read noise: {read_noise:.2f} e-\n")
         if meta["target_magnitude"] is not None:

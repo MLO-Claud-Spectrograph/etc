@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from functools import cached_property
 from math import erf, sqrt
 from pathlib import Path
 
@@ -27,7 +26,12 @@ DEFAULT_FIBER_COUPLING_EFFICIENCY = 1.0
 FIBER_COUNT = 7
 FIBER_PITCH = 250*u.micron
 DETECTOR_TEMPERATURE_C = -20.0
-SKY_SPECTRUM_RESOURCE = "desi_sky_dark"
+DEFAULT_SKY_BACKGROUND = "dark"
+SKY_SPECTRUM_RESOURCES = {
+    "dark": "desi_sky_dark",
+    "grey": "desi_sky_grey",
+    "bright": "desi_sky_bright",
+}
 
 # Approximate LSST g/r/i photon-counting response curves. Wavelengths in Angstroms.
 PHOTOMETRIC_BANDPASSES: dict[str, np.ndarray] = {
@@ -180,6 +184,10 @@ class ETCCalculator:
     @property
     def available_magnitude_bands(self) -> list[str]:
         return list(PHOTOMETRIC_BANDPASSES)
+
+    @property
+    def available_sky_backgrounds(self) -> list[str]:
+        return list(SKY_SPECTRUM_RESOURCES)
 
     @classmethod
     def _camera_config(cls, camera_model: str) -> CameraConfig:
@@ -411,14 +419,20 @@ class ETCCalculator:
         scaled_spectrum["flux"] *= scale_factor
         return scaled_spectrum, scale_factor
 
-    @cached_property
-    def sky_spectrum(self) -> tuple[u.Quantity, u.Quantity]:
-        """Return the line-resolved DESI benchmark sky spectrum.
+    def sky_spectrum(self, sky_background: str = DEFAULT_SKY_BACKGROUND) -> tuple[u.Quantity, u.Quantity]:
+        """Return the selected line-resolved DESI sky spectrum.
 
         The flux-density values are numerically per square arcsecond. The solid
         angle is applied explicitly after integrating the spectral photon rate.
         """
-        values = Table.read(REFERENCE_SPECTRA[SKY_SPECTRUM_RESOURCE])
+        try:
+            resource = SKY_SPECTRUM_RESOURCES[sky_background]
+        except KeyError as exc:
+            supported = ", ".join(self.available_sky_backgrounds)
+            raise ValueError(
+                f"Unsupported sky background '{sky_background}'. Supported: {supported}"
+            ) from exc
+        values = Table.read(REFERENCE_SPECTRA[resource])
         wavelength = values["wavelength"].quantity
         flux_density = values["flux"].quantity
         return wavelength, flux_density
@@ -446,6 +460,7 @@ class ETCCalculator:
         spectrum_file: Path | str,
         wave_centers: Iterable[float],
         binsize: float,
+        sky_background: str = DEFAULT_SKY_BACKGROUND,
         camera_model: str = "Kepler",
         grating_id: int | str = 1294,
         airmass: float = DEFAULT_AIRMASS,
@@ -503,9 +518,9 @@ class ETCCalculator:
         dark_current = self.get_dark_current(camera_model).to_value(u.electron/u.s)
         dark_counts = dark_current * n_total * exp_time
         extraction_fraction = self.extraction_fraction_for_camera(camera_model)
-        sky_wavelength, sky_flux_density = self.sky_spectrum
+        sky_wavelength, sky_surface_brightness = self.sky_spectrum(sky_background)
         sky_wave_nm = sky_wavelength.to_value(u.nm)
-        sky_flux_density *= self.fiber_sky_area
+        sky_flux_density = sky_surface_brightness * self.fiber_sky_area
         sky_throughput_toggles = dict(throughput_toggles or {})
         # The sky spectrum is an at-observatory surface brightness, so applying
         # atmospheric extinction again would attenuate it twice.
@@ -594,7 +609,8 @@ class ETCCalculator:
                 "dark_current": float(dark_current),
                 "fiber_sky_area_arcsec2": self.fiber_sky_area.to_value(u.arcsec**2),
                 "fiber_coupling_efficiency": float(fiber_coupling_efficiency),
-                "sky_spectrum": SKY_SPECTRUM_RESOURCE,
+                "sky_background": sky_background,
+                "sky_spectrum": SKY_SPECTRUM_RESOURCES[sky_background],
                 "camera_model": camera_model,
                 "read_noise_e": float(read_noise_e),
                 "grating": grating_id,
