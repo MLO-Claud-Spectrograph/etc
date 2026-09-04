@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from functools import cached_property
+from math import erf, sqrt
 from pathlib import Path
 
 import numpy as np
 from astropy import constants as const, units as u
+from astropy.table import Table
 from shared_data import CSV_FILES, REFERENCE_SPECTRA
 from simulator import (
     AtmosphericExtinction,
@@ -20,8 +23,13 @@ from simulator.core import FLUX_DENSITY_UNIT, TELESCOPE_AREA
 TELESCOPE_FOCAL_LENGTH = 8125 * u.mm
 DEFAULT_FIBER_LENGTH = 10 * u.m
 DEFAULT_AIRMASS = 1.3
+DEFAULT_FIBER_COUPLING_EFFICIENCY = 1.0
+FIBER_COUNT = 7
+FIBER_PITCH = 250*u.micron
+DETECTOR_TEMPERATURE_C = -20.0
+SKY_SPECTRUM_RESOURCE = "desi_sky_dark"
 
-# Approximate Johnson B/V photon-counting response curves. Wavelengths are Angstroms.
+# Approximate LSST g/r/i photon-counting response curves. Wavelengths in Angstroms.
 PHOTOMETRIC_BANDPASSES: dict[str, np.ndarray] = {
     "g": np.array(
         [
@@ -200,6 +208,8 @@ class ETCCalculator:
             camera_focal_length=100*u.mm,
             fiber_core_diameter=105*u.um,
             diffraction_order=1,
+            fiber_count=FIBER_COUNT,
+            fiber_pitch=FIBER_PITCH,
         )
 
     def default_read_noise_for_camera(self, camera_model: str) -> float:
@@ -208,17 +218,22 @@ class ETCCalculator:
     def dispersion_for_camera(self, camera_model: str) -> float:
         return abs(self.spectrograph_model(camera_model).dispersion.to_value(u.nm / u.pixel))
 
-    def spatial_aperture_for_camera(self, camera_model: str) -> float:
-        return self.spectrograph_model(camera_model).spatial_fwhm_px.to_value(u.pixel)
+    def extraction_aperture_for_camera(self, camera_model: str) -> float:
+        """Return the full trace-to-trace spacing in detector pixels."""
+        return self.spectrograph_model(camera_model).fiber_pitch_px.to_value(u.pixel)
+
+    def extraction_fraction_for_camera(self, camera_model: str) -> float:
+        """Fraction of a Gaussian fiber profile inside one fiber-pitch box."""
+        spectrograph = self.spectrograph_model(camera_model)
+        half_width = 0.5 * spectrograph.fiber_pitch_px.to_value(u.pixel)
+        sigma = spectrograph.spatial_sigma_px.to_value(u.pixel)
+        return float(erf(half_width / (sqrt(2) * sigma)))
 
     @property
-    def fiber_sky_area_arcsec2(self) -> float:
+    def fiber_sky_area(self) -> u.Quantity:
         spectrograph = self.spectrograph_model(self.available_camera_models[0])
-        angular_diameter_rad = (
-            spectrograph.fiber_core_diameter / TELESCOPE_FOCAL_LENGTH
-        ).to_value(u.dimensionless_unscaled)
-        angular_diameter_arcsec = angular_diameter_rad * u.rad.to(u.arcsec)
-        return float(np.pi * (angular_diameter_arcsec / 2) ** 2)
+        angular_diameter = (spectrograph.fiber_core_diameter / TELESCOPE_FOCAL_LENGTH).decompose() * u.rad
+        return (np.pi * (angular_diameter / 2) ** 2).to(u.arcsec**2)
 
     @staticmethod
     def _read_curve(resource_key: str) -> tuple[np.ndarray, np.ndarray]:
@@ -396,13 +411,17 @@ class ETCCalculator:
         scaled_spectrum["flux"] *= scale_factor
         return scaled_spectrum, scale_factor
 
-    @staticmethod
-    def _sky_flux_density(wavelength: u.Quantity, sky_brightness: float) -> u.Quantity:
-        flux_nu = (sky_brightness * u.ABmag).to(u.Jy)
-        return flux_nu.to(
-            FLUX_DENSITY_UNIT,
-            equivalencies=u.spectral_density(wavelength),
-        )
+    @cached_property
+    def sky_spectrum(self) -> tuple[u.Quantity, u.Quantity]:
+        """Return the line-resolved DESI benchmark sky spectrum.
+
+        The flux-density values are numerically per square arcsecond. The solid
+        angle is applied explicitly after integrating the spectral photon rate.
+        """
+        values = Table.read(REFERENCE_SPECTRA[SKY_SPECTRUM_RESOURCE])
+        wavelength = values["wavelength"].quantity
+        flux_density = values["flux"].quantity
+        return wavelength, flux_density
 
     @staticmethod
     def _integrated_electron_rate(
@@ -427,17 +446,16 @@ class ETCCalculator:
         spectrum_file: Path | str,
         wave_centers: Iterable[float],
         binsize: float,
-        sky_brightness: float = 21.6,
         camera_model: str = "Kepler",
         grating_id: int | str = 1294,
         airmass: float = DEFAULT_AIRMASS,
         fiber_length_m: float | None = None,
-        temp: float = -20,
+        fiber_coupling_efficiency: float = DEFAULT_FIBER_COUPLING_EFFICIENCY,
         target_magnitude: float | None = None,
         magnitude_band: str | None = None,
         throughput_toggles: Mapping[str, bool] | None = None,
         dispersion: float | None = None,
-        spacial_aperture: float | None = None,
+        extraction_aperture: float | None = None,
         read_noise_e: float | None = None,
     ) -> dict[str, object]:
         wave_centers = np.asarray(list(wave_centers), dtype=float)
@@ -453,17 +471,17 @@ class ETCCalculator:
             raise ValueError(
                 "One or more bins extend outside the ETC wavelength range (400-900 nm)."
             )
-        if temp < -20 or temp > 20:
-            raise ValueError("Temperature must be between -20 and 20 C.")
         if airmass <= 0:
             raise ValueError("Airmass must be positive.")
+        if not 0 <= fiber_coupling_efficiency <= 1:
+            raise ValueError("Fiber coupling efficiency must be between 0 and 1.")
 
         self._camera_config(camera_model)
         spec = self.load_spectrum(spectrum_file)
         spectrum_scale_factor = 1.0
         if target_magnitude is not None:
             if not magnitude_band:
-                raise ValueError("A B or V magnitude band is required when scaling the spectrum.")
+                raise ValueError("A magnitude band is required when scaling the spectrum.")
             spec, spectrum_scale_factor = self.scale_spectrum_to_magnitude(
                 spec,
                 target_magnitude=target_magnitude,
@@ -472,19 +490,26 @@ class ETCCalculator:
 
         if dispersion is None:
             dispersion = self.dispersion_for_camera(camera_model)
-        if spacial_aperture is None:
-            spacial_aperture = self.spatial_aperture_for_camera(camera_model)
+        if extraction_aperture is None:
+            extraction_aperture = self.extraction_aperture_for_camera(camera_model)
         if read_noise_e is None:
             read_noise_e = self.default_read_noise_for_camera(camera_model)
-        if dispersion <= 0 or spacial_aperture <= 0 or read_noise_e < 0:
+        if dispersion <= 0 or extraction_aperture <= 0 or read_noise_e < 0:
             raise ValueError("Detector extraction parameters must be non-negative and non-zero.")
 
         n_wave = binsize / dispersion
-        n_total = n_wave * spacial_aperture
+        n_total = n_wave * extraction_aperture
         read_noise_var = read_noise_e**2 * n_total
         dark_current = self.get_dark_current(camera_model).to_value(u.electron/u.s)
         dark_counts = dark_current * n_total * exp_time
-        fiber_sky_area = self.fiber_sky_area_arcsec2
+        extraction_fraction = self.extraction_fraction_for_camera(camera_model)
+        sky_wavelength, sky_flux_density = self.sky_spectrum
+        sky_wave_nm = sky_wavelength.to_value(u.nm)
+        sky_flux_density *= self.fiber_sky_area
+        sky_throughput_toggles = dict(throughput_toggles or {})
+        # The sky spectrum is an at-observatory surface brightness, so applying
+        # atmospheric extinction again would attenuate it twice.
+        sky_throughput_toggles["atmosphere"] = False
 
         results: list[SNRBinResult] = []
         plot_wave = None
@@ -514,14 +539,27 @@ class ETCCalculator:
                 source_flux,
                 components["total"],
             )
-            sky_rate_per_arcsec2 = self._integrated_electron_rate(
-                wavelength,
-                self._sky_flux_density(wavelength, sky_brightness),
-                components["total"],
+
+            sky_in_bin = (sky_wave_nm >= wave_min) & (sky_wave_nm <= wave_max)
+            if np.count_nonzero(sky_in_bin) < 2:
+                raise ValueError(f"No sufficient sky-spectrum samples in bin around {center} nm.")
+            sky_wave_bin = sky_wavelength[sky_in_bin]
+            sky_components = self.get_throughput_components(
+                sky_wave_bin.to_value(u.nm),
+                camera_model=camera_model,
+                grating_id=grating_id,
+                airmass=airmass,
+                fiber_length_m=fiber_length_m,
+                throughput_toggles=sky_throughput_toggles,
+            )
+            sky_rate = self._integrated_electron_rate(
+                sky_wave_bin,
+                sky_flux_density[sky_in_bin],
+                sky_components["total"],
             )
 
-            source_counts = source_rate * exp_time
-            sky_counts = sky_rate_per_arcsec2 * fiber_sky_area * exp_time
+            source_counts = source_rate * exp_time * fiber_coupling_efficiency * extraction_fraction
+            sky_counts = sky_rate * exp_time * extraction_fraction
             variance = source_counts + sky_counts + dark_counts + read_noise_var
             snr_bin = source_counts / np.sqrt(variance) if variance > 0 else 0.0
 
@@ -548,12 +586,15 @@ class ETCCalculator:
                 "exp_time": float(exp_time),
                 "n_total_pixels": float(n_total),
                 "n_wave_pixels": float(n_wave),
-                "spatial_aperture_pix": float(spacial_aperture),
+                "extraction_aperture_pix": float(extraction_aperture),
+                "extraction_fraction": float(extraction_fraction),
                 "dispersion_nm_per_pix": float(dispersion),
                 "read_noise_var": float(read_noise_var),
                 "dark_counts": float(dark_counts),
                 "dark_current": float(dark_current),
-                "fiber_sky_area_arcsec2": float(fiber_sky_area),
+                "fiber_sky_area_arcsec2": self.fiber_sky_area.to_value(u.arcsec**2),
+                "fiber_coupling_efficiency": float(fiber_coupling_efficiency),
+                "sky_spectrum": SKY_SPECTRUM_RESOURCE,
                 "camera_model": camera_model,
                 "read_noise_e": float(read_noise_e),
                 "grating": grating_id,

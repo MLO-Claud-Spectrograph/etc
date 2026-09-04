@@ -24,7 +24,14 @@ def test_detector_sampling_is_derived_from_camera():
     kepler_dispersion = calc.dispersion_for_camera("Kepler")
     assert qhy_dispersion > 0
     assert kepler_dispersion > qhy_dispersion
-    assert calc.spatial_aperture_for_camera("QHY268") > 0
+    spectrograph = calc.spectrograph_model("QHY268")
+    extraction_aperture = calc.extraction_aperture_for_camera("QHY268")
+    assert np.isclose(
+        extraction_aperture,
+        spectrograph.fiber_pitch_px.to_value(u.pixel),
+    )
+    assert extraction_aperture > spectrograph.spatial_fwhm_px.to_value(u.pixel)
+    assert 0 < calc.extraction_fraction_for_camera("QHY268") <= 1
 
 
 def test_load_spectrum_preserves_observed_wavelengths(tmp_path):
@@ -64,6 +71,16 @@ def test_total_throughput_uses_simulator_combination():
     assert np.allclose(components["total"], expected)
 
 
+def test_line_resolved_sky_spectrum_is_available():
+    calc = ETCCalculator()
+    wavelength, flux_density = calc.sky_spectrum
+    assert wavelength.size == flux_density.size
+    assert wavelength.size > 10_000
+    assert wavelength.min() < 400 * u.nm
+    assert wavelength.max() > 900 * u.nm
+    assert np.nanmax(flux_density.value) > 10 * np.nanmedian(flux_density.value)
+
+
 def test_snr_smoke(tmp_path):
     calc = ETCCalculator()
     spectrum_file = _write_flat_spectrum(tmp_path / "flat.txt", f_nu_jy=1e-4)
@@ -81,3 +98,31 @@ def test_snr_smoke(tmp_path):
     assert row.snr > 0
     assert result["meta"]["dispersion_nm_per_pix"] > 0
     assert result["meta"]["fiber_sky_area_arcsec2"] > 0
+    assert result["meta"]["detector_temperature_c"] == -20.0
+
+
+def test_fiber_coupling_and_airmass_only_change_source(tmp_path):
+    calc = ETCCalculator()
+    spectrum_file = _write_flat_spectrum(tmp_path / "flat.txt", f_nu_jy=1e-4)
+    common = {
+        "exp_time": 60.0,
+        "spectrum_file": spectrum_file,
+        "wave_centers": [600.0],
+        "binsize": 5.0,
+        "camera_model": "Kepler",
+        "grating_id": 1294,
+        "airmass": 1.3,
+    }
+    full = calc.get_SNR_from_spectrum(**common, fiber_coupling_efficiency=100.0)
+    half = calc.get_SNR_from_spectrum(**common, fiber_coupling_efficiency=50.0)
+    high_airmass = calc.get_SNR_from_spectrum(
+        **(common | {"airmass": 2.0}),
+        fiber_coupling_efficiency=100.0,
+    )
+    full_bin = full["bins"][0]
+    half_bin = half["bins"][0]
+    high_airmass_bin = high_airmass["bins"][0]
+    assert np.isclose(half_bin.source_counts, 0.5 * full_bin.source_counts)
+    assert np.isclose(half_bin.sky_counts, full_bin.sky_counts)
+    assert high_airmass_bin.source_counts < full_bin.source_counts
+    assert np.isclose(high_airmass_bin.sky_counts, full_bin.sky_counts)

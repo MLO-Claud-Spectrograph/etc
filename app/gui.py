@@ -10,7 +10,12 @@ from tkinter import messagebox, ttk
 import matplotlib as mpl
 from matplotlib import pyplot as plt
 
-from .core import DEFAULT_AIRMASS, ETCCalculator, get_default_spectrum_file
+from .core import (
+    DEFAULT_AIRMASS,
+    DEFAULT_FIBER_COUPLING_EFFICIENCY,
+    ETCCalculator,
+    get_default_spectrum_file,
+)
 
 # Pick the first available preferred style (fallback to default)
 for _style in ("seaborn-whitegrid", "seaborn", "ggplot", "classic", "default"):
@@ -207,11 +212,10 @@ class ETCGui(tk.Tk):
         self.entries = {}
         specs = [
             ("exp_time", "", "s", "Exposure Time:"),
-            ("wave_centers_nm", "", "nm", "Wave Centers (comma-separated):"),
+            ("wave_centers_nm", "450,550,650,750", "nm", "Wave Centers (comma-separated):"),
             ("binsize_nm", "", "nm", "Bin Size:"),
-            ("sky_brightness", "21.6", "mag/arcsec^2", "Sky Brightness:"),
             ("fiber_length_m", "10", "m", "Fiber Length:"),
-            ("temp_c", "-10", "C", "Temperature:"),
+            ("fiber_coupling_efficiency", f"{DEFAULT_FIBER_COUPLING_EFFICIENCY:g}", "(0-1)", "Fiber Coupling Efficiency:"),
         ]
 
         for index, (key, placeholder, unit, display) in enumerate(specs):
@@ -342,12 +346,11 @@ class ETCGui(tk.Tk):
                 "spectrum_file": self.spectrum_path.get(),
                 "wave_centers": wave_centers,
                 "binsize": float(self.entries["binsize_nm"].value()),
-                "sky_brightness": float(self.entries["sky_brightness"].value()),
                 "camera_model": self.camera_model.get(),
                 "grating_id": int(grating) if grating.isdigit() else grating,
                 "airmass": float(self.airmass.get()),
                 "fiber_length_m": float(self.entries["fiber_length_m"].value()),
-                "temp": float(self.entries["temp_c"].value()),
+                "fiber_coupling_efficiency": float(self.entries["fiber_coupling_efficiency"].value()),
                 "target_magnitude": target_magnitude,
                 "magnitude_band": self.magnitude_band.get(),
                 "throughput_toggles": {name: variable.get() for name, variable in self.toggle_vars.items()},
@@ -369,14 +372,18 @@ class ETCGui(tk.Tk):
         grating = meta["grating"]
         airmass = meta["airmass"]
         dispersion = meta["dispersion_nm_per_pix"]
-        spatial_aperture = meta["spatial_aperture_pix"]
+        extraction_aperture = meta["extraction_aperture_pix"]
+        extraction_fraction = meta["extraction_fraction"]
         read_noise = meta["read_noise_e"]
         self.output.delete("1.0", tk.END)
         self.output.insert(tk.END, f"Camera model: {camera_model}\n")
         self.output.insert(tk.END, f"Grating: {grating}\n")
         self.output.insert(tk.END, f"Airmass: {airmass:.2f}\n")
         self.output.insert(tk.END, f"Dispersion: {dispersion:.4f} nm/pix\n")
-        self.output.insert(tk.END, f"Spatial aperture: {spatial_aperture:.2f} pix\n")
+        self.output.insert(tk.END, f"Extraction aperture: {extraction_aperture:.2f} pix ({extraction_fraction:.2%} of fiber profile)\n")
+        self.output.insert(tk.END, f"Fiber coupling efficiency: {meta['fiber_coupling_efficiency']:.1f}\n")
+        self.output.insert(tk.END, f"Sky spectrum: {meta['sky_spectrum']}\n")
+        # self.output.insert(tk.END, f"Detector temperature: {meta['detector_temperature_c']:.0f} C\n")
         self.output.insert(tk.END, f"Read noise: {read_noise:.2f} e-\n")
         if meta["target_magnitude"] is not None:
             target_magnitude = meta["target_magnitude"]

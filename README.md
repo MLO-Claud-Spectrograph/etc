@@ -26,7 +26,7 @@ Input wavelengths, requested wave centers, and bin sizes are all interpreted in 
 
 The packaged `SNIa_max_z0p05` spectrum from `shared-data` is offered as the initial reference location.
 
-The optional **Flux scale magnitude** field rescales the entire input spectrum so that its synthetic Johnson B- or V-band AB magnitude matches the requested value. Leave the field blank to preserve the input spectrum's original flux normalization.
+The optional **Flux scale magnitude** field rescales the entire input spectrum so that its synthetic g-, r-, or i-band AB magnitude matches the requested value. Leave the field blank to preserve the input spectrum's original flux normalization.
 
 ## Instrument options
 
@@ -36,20 +36,33 @@ The optional **Flux scale magnitude** field rescales the entire input spectrum s
 
 The throughput toggles expose the same component model used by the simulator: atmosphere, fiber, miscellaneous losses, collimator, grating, detector window, and detector QE.
 
-Detector sampling parameters are not user inputs. Dispersion and projected fiber width are calculated from `SpectrographModel`, and read noise is taken from the selected camera configuration.
+Detector sampling parameters are not user inputs. Dispersion and fiber pitch are calculated from `SpectrographModel`, and read noise is taken from the selected camera configuration. Each extraction box is one full fiber pitch wide, extending halfway toward each adjacent trace.
 
 ## SNR inputs
 
 - **Exposure Time** (s)
 - **Wave Centers** (observer-frame nm), comma-separated
 - **Bin Size** (nm)
-- **Sky Brightness** (AB mag arcsec^-2; default 21.6)
 - **Fiber Length** (m; default 10)
-- **Temperature** (deg C; default -10)
+- **Fiber Coupling Efficiency** (fraction; default 1.0)
 
-The telescope diameter, pixel scale, lens throughput, detector read noise, dispersion, and spatial extraction width are no longer independent GUI inputs. Instrument geometry and throughput are taken from the shared simulator model instead.
+Fiber coupling represents point-source light lost before entering the fiber. It applies to source counts but not sky counts. The telescope diameter, pixel scale, lens throughput, detector read noise, dispersion, and spatial extraction width are not independent GUI inputs. Instrument geometry and throughput are taken from the shared simulator model instead.
 
-Sky background is integrated over the fiber's on-sky aperture rather than multiplying a detector extraction pixel count by an independent pixel scale.
+The detector is assumed to operate at -20&deg;C. Each camera's fixed -20&deg;C dark-current value is used, and there is no temperature input.
+
+## Sky and extraction model
+
+The background uses the line-resolved DESI benchmark sky spectrum distributed with [desimodel](https://github.com/desihub/desimodel). It spans 3500-10000 &#8491; in increments of 0.1 &#8491;, so narrow airglow features are integrated on the sky spectrum's own grid rather than on the potentially sparse source spectrum wavelength grid.
+
+Sky background is integrated over the fiber's circular on-sky aperture. Source and sky counts are then multiplied by the same Gaussian-profile extraction fraction for the single fiber pitch extraction box. Fiber coupling is applied only to the source&mdash;sky flux enters the fiber no matter what. Dark-current and read-noise variance use the same extraction-box pixel count.
+
+For each wavelength bin the ETC calculates
+
+```text
+source = integrated source electron rate * coupling * extraction fraction * time
+sky    = integrated sky electron rate per arcsec^2 * fiber area * extraction fraction * time
+SNR    = source / sqrt(source + sky + dark + read-noise variance)
+```
 
 ## Python API
 
@@ -65,6 +78,7 @@ result = calc.get_SNR_from_spectrum(
     camera_model="QHY268",
     grating_id=1294,
     airmass=1.3,
+    fiber_coupling_efficiency=0.75,
     target_magnitude=18.0,
     magnitude_band="g",
 )
