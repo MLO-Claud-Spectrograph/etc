@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "spectrograph-etc"
+name = "classi-etc"
 version = "0.1.0"
-description = "Exposure-time calculator for the MLO spectrograph"
+description = "Exposure time calculator for the MLO CLASSI spectrograph"
 readme = "README.md"
 authors = [
     {name = "Caden Gobat", email = "cgobat@sdsu.edu"},
@@ -17,12 +17,12 @@ dependencies = [
     "astropy",
     "matplotlib",
     "numpy>=2",
-    "spectrograph-shared-data",
-    "spectrograph-sim",
+    "classi-shared-data",
+    "classi-sim",
 ]
 
 [project.scripts]
-spectrograph-etc = "etc.gui:run"
+classi-etc = "etc.gui:run"
 
 [tool.setuptools]
 packages = ["etc"]

@@ -110,7 +110,7 @@ class SquareToggle(ttk.Frame):
 class ETCGui(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("MLO Spectrograph ETC")
+        self.title("MLO CLASSI Spectrograph ETC")
         self.geometry("1040x800")
 
         style = ttk.Style(self)

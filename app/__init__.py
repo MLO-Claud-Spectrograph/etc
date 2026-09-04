@@ -1,4 +1,4 @@
-"""Exposure-time calculator for the MLO spectrograph."""
+"""Exposure time calculator for the MLO CLASSI spectrograph."""
 
 from .core import ETCCalculator, SNRBinResult, get_default_spectrum_file
 
