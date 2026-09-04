@@ -389,7 +389,7 @@ class ETCGui(tk.Tk):
         self.output.insert(tk.END, f"Extraction aperture: {extraction_aperture:.2f} pix ({extraction_fraction:.2%} of fiber profile)\n")
         self.output.insert(tk.END, f"Fiber coupling efficiency: {meta['fiber_coupling_efficiency']:.1f}\n")
         self.output.insert(tk.END, f"Sky background: {meta['sky_background']}\n")
-        # self.output.insert(tk.END, f"Detector temperature: {meta['detector_temperature_c']:.0f} C\n")
+        self.output.insert(tk.END, f"Detector temperature: {meta['detector_temperature_c']:.0f} C\n")
         self.output.insert(tk.END, f"Read noise: {read_noise:.2f} e-\n")
         if meta["target_magnitude"] is not None:
             target_magnitude = meta["target_magnitude"]

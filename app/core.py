@@ -607,6 +607,7 @@ class ETCCalculator:
                 "read_noise_var": float(read_noise_var),
                 "dark_counts": float(dark_counts),
                 "dark_current": float(dark_current),
+                "detector_temperature_c": DETECTOR_TEMPERATURE_C,
                 "fiber_sky_area_arcsec2": self.fiber_sky_area.to_value(u.arcsec**2),
                 "fiber_coupling_efficiency": float(fiber_coupling_efficiency),
                 "sky_background": sky_background,
